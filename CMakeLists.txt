@@ -1,29 +1,22 @@
 cmake_minimum_required(VERSION 3.20)
 project(midend VERSION 1.0.0 LANGUAGES CXX)
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Compiler-specific flags
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
-endif()
 
-# Build type
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
 endif()
 
-# Options
-option(BUILD_TESTING "Build tests" ON)
-option(ENABLE_COVERAGE "Enable code coverage" OFF)
+
+option(BUILD_TESTING "Build tests" OFF)
 
 # Find packages
 if(BUILD_TESTING)
@@ -33,8 +26,6 @@ if(BUILD_TESTING)
         GIT_REPOSITORY https://github.com/google/googletest.git
         GIT_TAG        v1.14.0
     )
-    # For Windows: Prevent overriding the parent project's compiler/linker settings
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
     enable_testing()
 endif()
@@ -66,16 +57,6 @@ set_target_properties(midend PROPERTIES
     VISIBILITY_INLINES_HIDDEN YES
 )
 
-# Coverage
-if(ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(midend PRIVATE --coverage)
-        target_link_libraries(midend PRIVATE --coverage)
-    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(midend PRIVATE --coverage)
-        target_link_libraries(midend PRIVATE --coverage)
-    endif()
-endif()
 
 # Tests
 if(BUILD_TESTING)
@@ -129,5 +110,4 @@ message(STATUS "midend Configuration Summary:")
 message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  CXX Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build testing: ${BUILD_TESTING}")
-message(STATUS "  Enable coverage: ${ENABLE_COVERAGE}")
 message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
