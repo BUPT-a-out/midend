@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-15
+
+    - name: Configure CMake (Debug)
+      run: |
+        cmake -B build-debug \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DBUILD_TESTING=ON \
+          -DCMAKE_CXX_COMPILER=clang++-15
+
+    - name: Build (Debug)
+      run: cmake --build build-debug --parallel 2
+
+    - name: Run tests (Debug)
+      working-directory: build-debug
+      run: ctest --output-on-failure --verbose
+
+    - name: Configure CMake (Release)
+      run: |
+        cmake -B build-release \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTING=ON \
+          -DCMAKE_CXX_COMPILER=clang++-15
+
+    - name: Build (Release)
+      run: cmake --build build-release --parallel 2
+
+    - name: Run tests (Release)
+      working-directory: build-release
+      run: ctest --output-on-failure --verbose
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-15 llvm-15 lcov
+
+    - name: Configure CMake with coverage
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DBUILD_TESTING=ON \
+          -DENABLE_COVERAGE=ON \
+          -DCMAKE_CXX_COMPILER=clang++-15 \
+          -DCMAKE_CXX_FLAGS="--coverage"
+
+    - name: Build
+      run: cmake --build build --parallel 2
+
+    - name: Run tests
+      working-directory: build
+      run: ctest --output-on-failure --verbose
+
+    - name: Generate coverage report
+      run: |
+        lcov --capture --directory build --output-file coverage.info
+        lcov --remove coverage.info '/usr/*' '*/googletest/*' '*/tests/*' --output-file coverage.info
+        lcov --list coverage.info
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.info
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  clang-format:
+    name: Code Formatting Check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install clang-format
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-format-15
+
+    - name: Check formatting
+      run: |
+        find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | xargs clang-format-15 --dry-run --Werror
+
+  sanitizers:
+    name: Sanitizer Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sanitizer: [address, undefined, thread]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-14
+
+    - name: Configure CMake with sanitizer
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DBUILD_TESTING=ON \
+          -DCMAKE_CXX_COMPILER=clang++-14 \
+          -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer"
+
+    - name: Build
+      run: cmake --build build --parallel 2
+
+    - name: Run tests with sanitizer
+      working-directory: build
+      run: |
+        export ASAN_OPTIONS=detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1
+        export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+        export TSAN_OPTIONS=halt_on_error=1:history_size=7
+        ctest --output-on-failure --verbose
