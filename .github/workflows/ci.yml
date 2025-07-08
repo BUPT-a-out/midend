@@ -45,48 +45,6 @@ jobs:
       working-directory: build-release
       run: ctest --output-on-failure --verbose
 
-  coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang-15 llvm-15 lcov
-
-    - name: Configure CMake with coverage
-      run: |
-        cmake -B build \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DBUILD_TESTING=ON \
-          -DENABLE_COVERAGE=ON \
-          -DCMAKE_CXX_COMPILER=clang++-15 \
-          -DCMAKE_CXX_FLAGS="--coverage"
-
-    - name: Build
-      run: cmake --build build --parallel 2
-
-    - name: Run tests
-      working-directory: build
-      run: ctest --output-on-failure --verbose
-
-    - name: Generate coverage report
-      run: |
-        export GCOV_TOOL="llvm-cov-15 gcov"
-        lcov --gcov-tool "$GCOV_TOOL" --capture --directory build --output-file coverage.info
-        lcov --gcov-tool "$GCOV_TOOL" --remove coverage.info '/usr/*' '*/googletest/*' '*/tests/*' --output-file coverage.info
-        lcov --gcov-tool "$GCOV_TOOL" --list coverage.info
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.info
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-
   clang-format:
     name: Code Formatting Check
     runs-on: ubuntu-latest
