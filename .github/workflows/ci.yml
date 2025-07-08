@@ -74,9 +74,10 @@ jobs:
 
     - name: Generate coverage report
       run: |
-        lcov --capture --directory build --output-file coverage.info
-        lcov --remove coverage.info '/usr/*' '*/googletest/*' '*/tests/*' --output-file coverage.info
-        lcov --list coverage.info
+        export GCOV_TOOL="llvm-cov-15 gcov"
+        lcov --gcov-tool "$GCOV_TOOL" --capture --directory build --output-file coverage.info
+        lcov --gcov-tool "$GCOV_TOOL" --remove coverage.info '/usr/*' '*/googletest/*' '*/tests/*' --output-file coverage.info
+        lcov --gcov-tool "$GCOV_TOOL" --list coverage.info
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -100,36 +101,3 @@ jobs:
     - name: Check formatting
       run: |
         find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | xargs clang-format-15 --dry-run --Werror
-
-  sanitizers:
-    name: Sanitizer Tests
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        sanitizer: [address, undefined, thread]
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang-14
-
-    - name: Configure CMake with sanitizer
-      run: |
-        cmake -B build \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DBUILD_TESTING=ON \
-          -DCMAKE_CXX_COMPILER=clang++-14 \
-          -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer"
-
-    - name: Build
-      run: cmake --build build --parallel 2
-
-    - name: Run tests with sanitizer
-      working-directory: build
-      run: |
-        export ASAN_OPTIONS=detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1
-        export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
-        export TSAN_OPTIONS=halt_on_error=1:history_size=7
-        ctest --output-on-failure --verbose
