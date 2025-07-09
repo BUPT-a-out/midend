@@ -35,12 +35,13 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Collect source files
 file(GLOB_RECURSE IR_SOURCES "src/IR/*.cpp")
+file(GLOB_RECURSE PASS_SOURCES "src/Pass/*.cpp")
 file(GLOB_RECURSE SUPPORT_SOURCES "src/Support/*.cpp")
 
 # Create library
 add_library(midend
     ${IR_SOURCES}
-    ${TRANSFORM_SOURCES}
+    ${PASS_SOURCES}
     ${SUPPORT_SOURCES}
 )
 
