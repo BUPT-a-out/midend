@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "IR/Function.h"
 #include "IR/Module.h"
 #include "IR/Type.h"
