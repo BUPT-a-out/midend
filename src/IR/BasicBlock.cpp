@@ -34,7 +34,7 @@ void BasicBlock::push_back(Instruction* inst) {
     instructions_.push_back(inst);
     inst->setParent(this);
     inst->setIterator(std::prev(instructions_.end()));
-    
+
     if (inst->isTerminator()) {
         invalidatePredecessorCacheInFunction();
     }
@@ -50,11 +50,11 @@ BasicBlock::iterator BasicBlock::insert(iterator pos, Instruction* inst) {
     auto it = instructions_.insert(pos, inst);
     inst->setParent(this);
     inst->setIterator(it);
-    
+
     if (inst->isTerminator()) {
         invalidatePredecessorCacheInFunction();
     }
-    
+
     return it;
 }
 
@@ -63,11 +63,11 @@ BasicBlock::iterator BasicBlock::erase(iterator pos) {
     (*pos)->setParent(nullptr);
     delete *pos;
     auto result = instructions_.erase(pos);
-    
+
     if (was_terminator) {
         invalidatePredecessorCacheInFunction();
     }
-    
+
     return result;
 }
 
@@ -75,7 +75,7 @@ void BasicBlock::remove(Instruction* inst) {
     bool was_terminator = inst->isTerminator();
     instructions_.erase(inst->getIterator());
     inst->setParent(nullptr);
-    
+
     if (was_terminator) {
         invalidatePredecessorCacheInFunction();
     }
@@ -125,7 +125,7 @@ std::vector<BasicBlock*> BasicBlock::getPredecessors() const {
     }
 
     predecessors_cache_.clear();
-    
+
     if (!parent_) {
         predecessors_cached_ = true;
         return predecessors_cache_;
@@ -176,7 +176,7 @@ void BasicBlock::invalidatePredecessorCache() const {
 
 void BasicBlock::invalidatePredecessorCacheInFunction() const {
     if (!parent_) return;
-    
+
     for (auto* bb : *parent_) {
         bb->invalidatePredecessorCache();
     }

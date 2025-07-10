@@ -161,14 +161,14 @@ TEST_F(BasicBlockTest, PredecessorCaching) {
     auto* bb3 = BasicBlock::Create(context.get(), "bb3", function);
 
     IRBuilder builder(bb1);
-    
+
     // bb1 -> bb2 (unconditional branch)
     builder.createBr(bb2);
-    
+
     // bb2 -> bb3 (unconditional branch)
     builder.setInsertPoint(bb2);
     builder.createBr(bb3);
-    
+
     // bb3 -> return
     builder.setInsertPoint(bb3);
     builder.createRetVoid();
@@ -178,9 +178,9 @@ TEST_F(BasicBlockTest, PredecessorCaching) {
     auto preds2 = bb2->getPredecessors();
     auto preds3 = bb3->getPredecessors();
 
-    EXPECT_EQ(preds1.size(), 0u);   // bb1 has no predecessors
-    EXPECT_EQ(preds2.size(), 1u);   // bb2 has bb1 as predecessor
-    EXPECT_EQ(preds3.size(), 1u);   // bb3 has bb2 as predecessor
+    EXPECT_EQ(preds1.size(), 0u);  // bb1 has no predecessors
+    EXPECT_EQ(preds2.size(), 1u);  // bb2 has bb1 as predecessor
+    EXPECT_EQ(preds3.size(), 1u);  // bb3 has bb2 as predecessor
 
     EXPECT_EQ(preds2[0], bb1);
     EXPECT_EQ(preds3[0], bb2);
@@ -202,13 +202,13 @@ TEST_F(BasicBlockTest, PredecessorCacheInvalidation) {
     auto* bb3 = BasicBlock::Create(context.get(), "bb3", function);
 
     IRBuilder builder(bb1);
-    
+
     // Initially: bb1 -> bb2
     builder.createBr(bb2);
-    
+
     builder.setInsertPoint(bb2);
     builder.createRetVoid();
-    
+
     builder.setInsertPoint(bb3);
     builder.createRetVoid();
 
@@ -223,7 +223,7 @@ TEST_F(BasicBlockTest, PredecessorCacheInvalidation) {
     // Modify the branch to target bb3 instead of bb2
     auto* br = dyn_cast<BranchInst>(bb1->getTerminator());
     ASSERT_NE(br, nullptr);
-    
+
     br->setOperand(0, bb3);  // Change target from bb2 to bb3
 
     // Test cache invalidation - predecessors should be updated

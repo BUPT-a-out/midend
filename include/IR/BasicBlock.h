@@ -16,7 +16,7 @@ class BasicBlock : public Value {
     std::list<Instruction*> instructions_;
     using BBListType = std::list<BasicBlock*>;
     BBListType::iterator iterator_;
-    
+
     // Cache for predecessor results
     mutable std::vector<BasicBlock*> predecessors_cache_;
     mutable bool predecessors_cached_ = false;
@@ -83,7 +83,7 @@ class BasicBlock : public Value {
 
     std::vector<BasicBlock*> getPredecessors() const;
     std::vector<BasicBlock*> getSuccessors() const;
-    
+
     // Cache invalidation methods
     void invalidatePredecessorCache() const;
     void invalidatePredecessorCacheInFunction() const;

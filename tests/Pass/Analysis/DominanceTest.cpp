@@ -440,7 +440,7 @@ TEST_F(DominanceTest, DominanceAnalysisPass) {
     DominanceAnalysis analysis;
     auto result = analysis.runOnFunction(*func);
     ASSERT_NE(result, nullptr);
-    
+
     auto* domInfo = dynamic_cast<DominanceInfo*>(result.get());
     ASSERT_NE(domInfo, nullptr);
 
@@ -449,14 +449,17 @@ TEST_F(DominanceTest, DominanceAnalysisPass) {
 }
 
 TEST_F(DominanceTest, NestedLoopsWithMultipleBackEdges) {
-    // Create nested loops: entry -> outer_header -> inner_header -> inner_body -> inner_header | outer_body -> outer_header | exit
+    // Create nested loops: entry -> outer_header -> inner_header -> inner_body
+    // -> inner_header | outer_body -> outer_header | exit
     auto* int32Ty = context->getInt32Type();
     auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
     auto* func = Function::Create(fnTy, "nested_loops", module.get());
 
     auto* entry = BasicBlock::Create(context.get(), "entry", func);
-    auto* outer_header = BasicBlock::Create(context.get(), "outer_header", func);
-    auto* inner_header = BasicBlock::Create(context.get(), "inner_header", func);
+    auto* outer_header =
+        BasicBlock::Create(context.get(), "outer_header", func);
+    auto* inner_header =
+        BasicBlock::Create(context.get(), "inner_header", func);
     auto* inner_body = BasicBlock::Create(context.get(), "inner_body", func);
     auto* outer_body = BasicBlock::Create(context.get(), "outer_body", func);
     auto* exit = BasicBlock::Create(context.get(), "exit", func);
@@ -467,22 +470,26 @@ TEST_F(DominanceTest, NestedLoopsWithMultipleBackEdges) {
     builder.setInsertPoint(outer_header);
     auto* outerPhi = builder.createPHI(int32Ty, "outer_counter");
     outerPhi->addIncoming(func->getArg(0), entry);
-    auto* outerCond = builder.createICmpSGT(outerPhi, builder.getInt32(0), "outer_cond");
+    auto* outerCond =
+        builder.createICmpSGT(outerPhi, builder.getInt32(0), "outer_cond");
     builder.createCondBr(outerCond, inner_header, exit);
 
     builder.setInsertPoint(inner_header);
     auto* innerPhi = builder.createPHI(int32Ty, "inner_counter");
     innerPhi->addIncoming(builder.getInt32(10), outer_header);
-    auto* innerCond = builder.createICmpSGT(innerPhi, builder.getInt32(0), "inner_cond");
+    auto* innerCond =
+        builder.createICmpSGT(innerPhi, builder.getInt32(0), "inner_cond");
     builder.createCondBr(innerCond, inner_body, outer_body);
 
     builder.setInsertPoint(inner_body);
-    auto* innerDec = builder.createSub(innerPhi, builder.getInt32(1), "inner_dec");
+    auto* innerDec =
+        builder.createSub(innerPhi, builder.getInt32(1), "inner_dec");
     innerPhi->addIncoming(innerDec, inner_body);
     builder.createBr(inner_header);
 
     builder.setInsertPoint(outer_body);
-    auto* outerDec = builder.createSub(outerPhi, builder.getInt32(1), "outer_dec");
+    auto* outerDec =
+        builder.createSub(outerPhi, builder.getInt32(1), "outer_dec");
     outerPhi->addIncoming(outerDec, outer_body);
     builder.createBr(outer_header);
 
@@ -499,7 +506,8 @@ TEST_F(DominanceTest, NestedLoopsWithMultipleBackEdges) {
     EXPECT_TRUE(domInfo.dominates(outer_header, outer_body));
     EXPECT_TRUE(domInfo.dominates(outer_header, exit));
 
-    // Inner body should not dominate outer body (can reach outer_body through inner_header)
+    // Inner body should not dominate outer body (can reach outer_body through
+    // inner_header)
     EXPECT_FALSE(domInfo.dominates(inner_body, outer_body));
 
     // Check immediate dominators
@@ -512,8 +520,10 @@ TEST_F(DominanceTest, NestedLoopsWithMultipleBackEdges) {
     // Check dominance frontiers for loop headers
     const auto& outerDF = domInfo.getDominanceFrontier(outer_body);
     const auto& innerDF = domInfo.getDominanceFrontier(inner_body);
-    EXPECT_TRUE(outerDF.count(outer_header) > 0);  // outer_body -> outer_header is a back edge
-    EXPECT_TRUE(innerDF.count(inner_header) > 0);  // inner_body -> inner_header is a back edge
+    EXPECT_TRUE(outerDF.count(outer_header) >
+                0);  // outer_body -> outer_header is a back edge
+    EXPECT_TRUE(innerDF.count(inner_header) >
+                0);  // inner_body -> inner_header is a back edge
 }
 
 TEST_F(DominanceTest, IrreducibleCFG) {
@@ -532,7 +542,8 @@ TEST_F(DominanceTest, IrreducibleCFG) {
     auto* exit = BasicBlock::Create(context.get(), "exit", func);
 
     IRBuilder builder(entry);
-    auto* cond = builder.createICmpSGT(func->getArg(0), builder.getInt32(0), "cond");
+    auto* cond =
+        builder.createICmpSGT(func->getArg(0), builder.getInt32(0), "cond");
     builder.createCondBr(cond, bb1, bb2);
 
     builder.setInsertPoint(bb1);
@@ -548,13 +559,15 @@ TEST_F(DominanceTest, IrreducibleCFG) {
     phi3->addIncoming(phi1, bb1);
     phi3->addIncoming(func->getArg(0), bb2);
     phi3->addIncoming(builder.getInt32(42), bb4);
-    auto* loopCond = builder.createICmpSGT(phi3, builder.getInt32(10), "loop_cond");
+    auto* loopCond =
+        builder.createICmpSGT(phi3, builder.getInt32(10), "loop_cond");
     builder.createCondBr(loopCond, bb4, exit);
 
     builder.setInsertPoint(bb4);
     auto* dec = builder.createSub(phi3, builder.getInt32(1), "dec");
     phi1->addIncoming(dec, bb4);
-    auto* backEdgeCond = builder.createICmpSGT(dec, builder.getInt32(5), "back_edge_cond");
+    auto* backEdgeCond =
+        builder.createICmpSGT(dec, builder.getInt32(5), "back_edge_cond");
     builder.createCondBr(backEdgeCond, bb1, bb3);
 
     builder.setInsertPoint(exit);
@@ -682,7 +695,8 @@ TEST_F(DominanceTest, DominatorTreeLCA) {
     auto* exit = BasicBlock::Create(context.get(), "exit", func);
 
     IRBuilder builder(entry);
-    auto* cond1 = builder.createICmpSGT(func->getArg(0), builder.getInt32(10), "cond1");
+    auto* cond1 =
+        builder.createICmpSGT(func->getArg(0), builder.getInt32(10), "cond1");
     builder.createCondBr(cond1, a, c);
 
     builder.setInsertPoint(a);
@@ -692,7 +706,8 @@ TEST_F(DominanceTest, DominatorTreeLCA) {
     builder.createBr(d);
 
     builder.setInsertPoint(c);
-    auto* cond2 = builder.createICmpSGT(func->getArg(0), builder.getInt32(5), "cond2");
+    auto* cond2 =
+        builder.createICmpSGT(func->getArg(0), builder.getInt32(5), "cond2");
     builder.createCondBr(cond2, d, e);
 
     builder.setInsertPoint(d);
@@ -741,7 +756,8 @@ TEST_F(DominanceTest, DominatorTreeLCA) {
     EXPECT_EQ(lcaAA->bb, a);
 
     // Test null cases
-    BasicBlock* nonExistent = BasicBlock::Create(context.get(), "nonexistent", func);
+    BasicBlock* nonExistent =
+        BasicBlock::Create(context.get(), "nonexistent", func);
     auto* lcaNull = domTree->findLCA(a, nonExistent);
     EXPECT_EQ(lcaNull, nullptr);
 }
@@ -793,23 +809,24 @@ TEST_F(DominanceTest, DominatorTreeGetNodesAtLevel) {
 
     IRBuilder builder(entry);
     builder.createBr(bb1);
-    
+
     builder.setInsertPoint(bb1);
-    auto* cond = builder.createICmpSGT(complexFunc->getArg(0), builder.getInt32(0), "cond");
+    auto* cond = builder.createICmpSGT(complexFunc->getArg(0),
+                                       builder.getInt32(0), "cond");
     builder.createCondBr(cond, bb2, bb3);
-    
+
     builder.setInsertPoint(bb2);
     builder.createBr(bb4);
-    
+
     builder.setInsertPoint(bb3);
     builder.createBr(bb5);
-    
+
     builder.setInsertPoint(bb4);
     builder.createBr(exit);
-    
+
     builder.setInsertPoint(bb5);
     builder.createBr(exit);
-    
+
     builder.setInsertPoint(exit);
     auto* phi = builder.createPHI(int32Ty, "result");
     phi->addIncoming(builder.getInt32(1), bb4);
@@ -818,17 +835,17 @@ TEST_F(DominanceTest, DominatorTreeGetNodesAtLevel) {
 
     DominanceInfo complexDomInfo(complexFunc);
     auto* complexDomTree = complexDomInfo.getDominatorTree();
-    
+
     // Verify levels
     auto complexLevel0 = complexDomTree->getNodesAtLevel(0);
     EXPECT_EQ(complexLevel0.size(), 1u);  // entry
-    
+
     auto complexLevel1 = complexDomTree->getNodesAtLevel(1);
     EXPECT_EQ(complexLevel1.size(), 1u);  // bb1
-    
+
     auto complexLevel2 = complexDomTree->getNodesAtLevel(2);
     EXPECT_EQ(complexLevel2.size(), 3u);  // bb2, bb3, exit
-    
+
     auto complexLevel3 = complexDomTree->getNodesAtLevel(3);
     EXPECT_EQ(complexLevel3.size(), 2u);  // bb4, bb5
 }
@@ -843,26 +860,28 @@ TEST_F(DominanceTest, NestedDiamondPatterns) {
     auto* entry = BasicBlock::Create(context.get(), "entry", func);
     auto* outerLeft = BasicBlock::Create(context.get(), "outer_left", func);
     auto* outerRight = BasicBlock::Create(context.get(), "outer_right", func);
-    
+
     // Inner diamonds
     auto* innerLeft1 = BasicBlock::Create(context.get(), "inner_left1", func);
     auto* innerRight1 = BasicBlock::Create(context.get(), "inner_right1", func);
     auto* innerMerge1 = BasicBlock::Create(context.get(), "inner_merge1", func);
-    
+
     auto* innerLeft2 = BasicBlock::Create(context.get(), "inner_left2", func);
     auto* innerRight2 = BasicBlock::Create(context.get(), "inner_right2", func);
     auto* innerMerge2 = BasicBlock::Create(context.get(), "inner_merge2", func);
-    
+
     auto* outerMerge = BasicBlock::Create(context.get(), "outer_merge", func);
     auto* exit = BasicBlock::Create(context.get(), "exit", func);
 
     IRBuilder builder(entry);
-    auto* outerCond = builder.createICmpSGT(func->getArg(0), func->getArg(1), "outer_cond");
+    auto* outerCond =
+        builder.createICmpSGT(func->getArg(0), func->getArg(1), "outer_cond");
     builder.createCondBr(outerCond, outerLeft, outerRight);
 
     // Left path: nested diamond
     builder.setInsertPoint(outerLeft);
-    auto* innerCond1 = builder.createICmpSGT(func->getArg(1), func->getArg(2), "inner_cond1");
+    auto* innerCond1 =
+        builder.createICmpSGT(func->getArg(1), func->getArg(2), "inner_cond1");
     builder.createCondBr(innerCond1, innerLeft1, innerRight1);
 
     builder.setInsertPoint(innerLeft1);
@@ -881,7 +900,8 @@ TEST_F(DominanceTest, NestedDiamondPatterns) {
 
     // Right path: another nested diamond
     builder.setInsertPoint(outerRight);
-    auto* innerCond2 = builder.createICmpSGT(func->getArg(0), func->getArg(2), "inner_cond2");
+    auto* innerCond2 =
+        builder.createICmpSGT(func->getArg(0), func->getArg(2), "inner_cond2");
     builder.createCondBr(innerCond2, innerLeft2, innerRight2);
 
     builder.setInsertPoint(innerLeft2);
@@ -948,7 +968,7 @@ TEST_F(DominanceTest, NestedDiamondPatterns) {
     const auto& innerLeft1DF = domInfo.getDominanceFrontier(innerLeft1);
     const auto& innerRight1DF = domInfo.getDominanceFrontier(innerRight1);
     const auto& innerMerge1DF = domInfo.getDominanceFrontier(innerMerge1);
-    
+
     EXPECT_TRUE(innerLeft1DF.count(innerMerge1) > 0);
     EXPECT_TRUE(innerRight1DF.count(innerMerge1) > 0);
     EXPECT_TRUE(innerMerge1DF.count(outerMerge) > 0);
@@ -957,14 +977,15 @@ TEST_F(DominanceTest, NestedDiamondPatterns) {
     auto* domTree = domInfo.getDominatorTree();
     auto* rootNode = domTree->getRoot();
     EXPECT_EQ(rootNode->bb, entry);
-    
+
     // Verify tree levels
     auto level0 = domTree->getNodesAtLevel(0);
     EXPECT_EQ(level0.size(), 1u);  // entry
-    
+
     auto level1 = domTree->getNodesAtLevel(1);
     EXPECT_EQ(level1.size(), 3u);  // outerLeft, outerRight, outerMerge
-    
+
     auto level2 = domTree->getNodesAtLevel(2);
-    EXPECT_EQ(level2.size(), 7u);  // innerLeft1, innerRight1, innerMerge1, innerLeft2, innerRight2, innerMerge2, exit
+    EXPECT_EQ(level2.size(), 7u);  // innerLeft1, innerRight1, innerMerge1,
+                                   // innerLeft2, innerRight2, innerMerge2, exit
 }
