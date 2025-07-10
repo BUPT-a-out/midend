@@ -42,6 +42,23 @@ BranchInst* BranchInst::Create(Value* cond, BasicBlock* trueDest,
     return inst;
 }
 
+void BranchInst::setOperand(unsigned i, Value* v) {
+    // Get the current value to check if it's a BasicBlock
+    Value* oldVal = getOperand(i);
+    bool oldWasBasicBlock = oldVal && oldVal->getValueKind() == ValueKind::BasicBlock;
+    bool newIsBasicBlock = v && v->getValueKind() == ValueKind::BasicBlock;
+    
+    // Call base class setOperand
+    Instruction::setOperand(i, v);
+    
+    // Invalidate predecessor cache if we're changing successor BasicBlocks
+    if (oldWasBasicBlock || newIsBasicBlock) {
+        if (auto* parent = getParent()) {
+            parent->invalidatePredecessorCacheInFunction();
+        }
+    }
+}
+
 Instruction* BranchInst::clone() const {
     if (isUnconditional()) {
         return Create(getSuccessor(0));

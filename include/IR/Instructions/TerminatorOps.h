@@ -81,6 +81,8 @@ class BranchInst : public Instruction {
         return isUnconditional() ? getSuccessor(0) : nullptr;
     }
 
+    void setOperand(unsigned i, Value* v);
+
     Instruction* clone() const override;
 
     static bool classof(const Value* v) {
