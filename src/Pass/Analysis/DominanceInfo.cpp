@@ -25,7 +25,8 @@ void DominanceInfo::computeDominators() {
     BBVector allBlocks;
 
     // Collect all basic blocks
-    // TODO: using RPO would be more efficient: https://github.com/BUPT-a-out/midend/issues/3
+    // TODO: using RPO would be more efficient:
+    // https://github.com/BUPT-a-out/midend/issues/3
     for (auto& BB : *function_) {
         allBlocks.push_back(BB);
         dominators_[BB] = BBSet();
@@ -181,14 +182,14 @@ const DominanceInfo::BBSet& DominanceInfo::getDominated(BasicBlock* BB) const {
     if (it != dominatedCache_.end()) {
         return it->second;
     }
-    
+
     BBSet dominated;
     for (auto& other : *function_) {
         if (dominates(BB, other)) {
             dominated.insert(other);
         }
     }
-    
+
     dominatedCache_[BB] = dominated;
     return dominatedCache_[BB];
 }
@@ -250,7 +251,8 @@ void DominanceInfo::print() const {
     }
 }
 
-DominatorTree::DominatorTree(const DominanceInfo& domInfo) : domInfo_(&domInfo) {
+DominatorTree::DominatorTree(const DominanceInfo& domInfo)
+    : domInfo_(&domInfo) {
     if (domInfo.getFunction()->empty()) return;
 
     auto& func = *domInfo.getFunction();
