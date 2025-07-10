@@ -153,3 +153,84 @@ TEST_F(BasicBlockTest, BasicBlockMovement) {
     ++it;
     EXPECT_EQ(*it, bb1);
 }
+
+TEST_F(BasicBlockTest, PredecessorCaching) {
+    // Create a simple CFG with multiple blocks
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", function);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", function);
+    auto* bb3 = BasicBlock::Create(context.get(), "bb3", function);
+
+    IRBuilder builder(bb1);
+    
+    // bb1 -> bb2 (unconditional branch)
+    builder.createBr(bb2);
+    
+    // bb2 -> bb3 (unconditional branch)
+    builder.setInsertPoint(bb2);
+    builder.createBr(bb3);
+    
+    // bb3 -> return
+    builder.setInsertPoint(bb3);
+    builder.createRetVoid();
+
+    // Test predecessor results
+    auto preds1 = bb1->getPredecessors();
+    auto preds2 = bb2->getPredecessors();
+    auto preds3 = bb3->getPredecessors();
+
+    EXPECT_EQ(preds1.size(), 0u);   // bb1 has no predecessors
+    EXPECT_EQ(preds2.size(), 1u);   // bb2 has bb1 as predecessor
+    EXPECT_EQ(preds3.size(), 1u);   // bb3 has bb2 as predecessor
+
+    EXPECT_EQ(preds2[0], bb1);
+    EXPECT_EQ(preds3[0], bb2);
+
+    // Test cache consistency by calling getPredecessors multiple times
+    auto preds2_again = bb2->getPredecessors();
+    auto preds3_again = bb3->getPredecessors();
+
+    EXPECT_EQ(preds2.size(), preds2_again.size());
+    EXPECT_EQ(preds3.size(), preds3_again.size());
+    EXPECT_EQ(preds2[0], preds2_again[0]);
+    EXPECT_EQ(preds3[0], preds3_again[0]);
+}
+
+TEST_F(BasicBlockTest, PredecessorCacheInvalidation) {
+    // Create a simple CFG
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", function);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", function);
+    auto* bb3 = BasicBlock::Create(context.get(), "bb3", function);
+
+    IRBuilder builder(bb1);
+    
+    // Initially: bb1 -> bb2
+    builder.createBr(bb2);
+    
+    builder.setInsertPoint(bb2);
+    builder.createRetVoid();
+    
+    builder.setInsertPoint(bb3);
+    builder.createRetVoid();
+
+    // Test initial state
+    auto preds2 = bb2->getPredecessors();
+    auto preds3 = bb3->getPredecessors();
+
+    EXPECT_EQ(preds2.size(), 1u);
+    EXPECT_EQ(preds3.size(), 0u);
+    EXPECT_EQ(preds2[0], bb1);
+
+    // Modify the branch to target bb3 instead of bb2
+    auto* br = dyn_cast<BranchInst>(bb1->getTerminator());
+    ASSERT_NE(br, nullptr);
+    
+    br->setOperand(0, bb3);  // Change target from bb2 to bb3
+
+    // Test cache invalidation - predecessors should be updated
+    auto preds2_after = bb2->getPredecessors();
+    auto preds3_after = bb3->getPredecessors();
+
+    EXPECT_EQ(preds2_after.size(), 0u);  // bb2 no longer has predecessors
+    EXPECT_EQ(preds3_after.size(), 1u);  // bb3 now has bb1 as predecessor
+    EXPECT_EQ(preds3_after[0], bb1);
+}

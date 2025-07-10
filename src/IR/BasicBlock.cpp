@@ -34,6 +34,10 @@ void BasicBlock::push_back(Instruction* inst) {
     instructions_.push_back(inst);
     inst->setParent(this);
     inst->setIterator(std::prev(instructions_.end()));
+    
+    if (inst->isTerminator()) {
+        invalidatePredecessorCacheInFunction();
+    }
 }
 
 void BasicBlock::push_front(Instruction* inst) {
@@ -46,18 +50,35 @@ BasicBlock::iterator BasicBlock::insert(iterator pos, Instruction* inst) {
     auto it = instructions_.insert(pos, inst);
     inst->setParent(this);
     inst->setIterator(it);
+    
+    if (inst->isTerminator()) {
+        invalidatePredecessorCacheInFunction();
+    }
+    
     return it;
 }
 
 BasicBlock::iterator BasicBlock::erase(iterator pos) {
+    bool was_terminator = (*pos)->isTerminator();
     (*pos)->setParent(nullptr);
     delete *pos;
-    return instructions_.erase(pos);
+    auto result = instructions_.erase(pos);
+    
+    if (was_terminator) {
+        invalidatePredecessorCacheInFunction();
+    }
+    
+    return result;
 }
 
 void BasicBlock::remove(Instruction* inst) {
+    bool was_terminator = inst->isTerminator();
     instructions_.erase(inst->getIterator());
     inst->setParent(nullptr);
+    
+    if (was_terminator) {
+        invalidatePredecessorCacheInFunction();
+    }
 }
 
 void BasicBlock::insertBefore(BasicBlock* bb) {
@@ -99,9 +120,16 @@ void BasicBlock::eraseFromParent() {
 }
 
 std::vector<BasicBlock*> BasicBlock::getPredecessors() const {
-    std::vector<BasicBlock*> predecessors;
+    if (predecessors_cached_) {
+        return predecessors_cache_;
+    }
 
-    if (!parent_) return predecessors;
+    predecessors_cache_.clear();
+    
+    if (!parent_) {
+        predecessors_cached_ = true;
+        return predecessors_cache_;
+    }
 
     for (auto* bb : parent_->getBasicBlocks()) {
         if (bb == this) continue;
@@ -112,14 +140,15 @@ std::vector<BasicBlock*> BasicBlock::getPredecessors() const {
         if (auto* br = dyn_cast<BranchInst>(terminator)) {
             for (unsigned i = 0; i < br->getNumSuccessors(); ++i) {
                 if (br->getSuccessor(i) == this) {
-                    predecessors.push_back(bb);
+                    predecessors_cache_.push_back(bb);
                     break;
                 }
             }
         }
     }
 
-    return predecessors;
+    predecessors_cached_ = true;
+    return predecessors_cache_;
 }
 
 std::vector<BasicBlock*> BasicBlock::getSuccessors() const {
@@ -138,6 +167,19 @@ std::vector<BasicBlock*> BasicBlock::getSuccessors() const {
     }
 
     return successors;
+}
+
+void BasicBlock::invalidatePredecessorCache() const {
+    predecessors_cached_ = false;
+    predecessors_cache_.clear();
+}
+
+void BasicBlock::invalidatePredecessorCacheInFunction() const {
+    if (!parent_) return;
+    
+    for (auto* bb : *parent_) {
+        bb->invalidatePredecessorCache();
+    }
 }
 
 }  // namespace midend
