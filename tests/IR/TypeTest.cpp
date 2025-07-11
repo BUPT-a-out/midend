@@ -5,6 +5,8 @@
 
 using namespace midend;
 
+namespace {
+
 class TypeTest : public ::testing::Test {
    protected:
     void SetUp() override { context = std::make_unique<Context>(); }
@@ -100,3 +102,5 @@ TEST_F(TypeTest, TypeCasting) {
     auto* floatTy = midend::dyn_cast<FloatType>(ty);
     EXPECT_EQ(floatTy, nullptr);
 }
+
+}  // namespace

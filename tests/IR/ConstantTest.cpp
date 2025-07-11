@@ -5,6 +5,8 @@
 
 using namespace midend;
 
+namespace {
+
 class ConstantTest : public ::testing::Test {
    protected:
     void SetUp() override { context = std::make_unique<Context>(); }
@@ -167,3 +169,5 @@ TEST_F(ConstantTest, ConstantExpr) {
     auto* mulExpr = ConstantExpr::getMul(val1, val2);
     EXPECT_EQ(mulExpr->getOpcode(), Opcode::Mul);
 }
+
+}  // namespace

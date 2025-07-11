@@ -9,6 +9,8 @@
 
 using namespace midend;
 
+namespace {
+
 class PassManagerTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -291,6 +293,7 @@ TEST_F(PassManagerTest, AnalysisRequirementChecking) {
     pm.addPass<RequiringPass>();
 
     // Run without providing the required analysis - should fail
+    std::cout << "Running pass without required analysis..." << std::endl;
     bool result = pm.run(*module);
     EXPECT_FALSE(result);  // Pass should fail due to missing analysis
     EXPECT_EQ(RequiringPass::lastAnalysisValue,
@@ -394,6 +397,7 @@ TEST_F(PassManagerTest, FunctionAnalysisRequirementChecking) {
     fpm.addPass<RequiringFunctionPass>();
 
     // Run without providing the required analysis - should fail
+    std::cout << "Running pass without required analysis..." << std::endl;
     bool result = fpm.run();
     EXPECT_FALSE(result);  // Pass should fail due to missing analysis
     EXPECT_EQ(RequiringFunctionPass::lastAnalysisValue,
@@ -526,7 +530,11 @@ TEST_F(PassManagerTest, UnknownAnalysisRequirementFails) {
     fpm.addPass<UnknownAnalysisRequiringPass>();
 
     // Run with unknown analysis requirement - should fail
+    std::cout << "Running pass with unknown analysis requirement..."
+              << std::endl;
     bool result = fpm.run();
     EXPECT_FALSE(result);
     EXPECT_FALSE(UnknownAnalysisRequiringPass::executed);
 }
+
+}  // namespace

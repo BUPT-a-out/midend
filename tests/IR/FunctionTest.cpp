@@ -7,6 +7,8 @@
 
 using namespace midend;
 
+namespace {
+
 class FunctionTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -126,3 +128,5 @@ TEST_F(FunctionTest, ValueKindAndCasting) {
     EXPECT_NE(function, nullptr);
     EXPECT_EQ(function, func);
 }
+
+}  // namespace

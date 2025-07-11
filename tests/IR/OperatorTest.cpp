@@ -8,6 +8,8 @@
 
 using namespace midend;
 
+namespace {
+
 class OperatorTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -322,3 +324,5 @@ TEST_F(OperatorTest, InstructionClassification) {
         logicalInst->isBinaryOp());  // Logical ops are classified as binary ops
     EXPECT_FALSE(logicalInst->isComparison());
 }
+
+}  // namespace

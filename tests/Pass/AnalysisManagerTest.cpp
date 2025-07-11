@@ -9,6 +9,8 @@
 
 using namespace midend;
 
+namespace {
+
 class AnalysisManagerTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -492,3 +494,5 @@ TEST_F(AnalysisManagerTest, MultipleAnalysisTypes) {
     EXPECT_EQ(funcAnalysis->getName(), function->getName());
     EXPECT_EQ(modAnalysis->getValue(), 42);
 }
+
+}  // namespace

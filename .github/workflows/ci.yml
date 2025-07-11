@@ -17,33 +17,34 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y clang-15
 
-    - name: Configure CMake (Debug)
+    - name: Install xmake
       run: |
-        cmake -B build-debug \
-          -DCMAKE_BUILD_TYPE=Debug \
-          -DBUILD_TESTING=ON \
-          -DCMAKE_CXX_COMPILER=clang++-15
+        curl -fsSL https://xmake.io/shget.text | bash
+        echo "${HOME}/.local/bin" >> $GITHUB_PATH
+
+    - name: Configure xmake
+      run: |
+        xmake config --toolchain=clang --mode=debug --yes
 
     - name: Build (Debug)
-      run: cmake --build build-debug --parallel 2
+      run: |
+        xmake build
 
     - name: Run tests (Debug)
-      working-directory: build-debug
-      run: ctest --output-on-failure --verbose
-
-    - name: Configure CMake (Release)
       run: |
-        cmake -B build-release \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DBUILD_TESTING=ON \
-          -DCMAKE_CXX_COMPILER=clang++-15
+        xmake test
+
+    - name: Configure xmake (Release)
+      run: |
+        xmake config --toolchain=clang --mode=release
 
     - name: Build (Release)
-      run: cmake --build build-release --parallel 2
+      run: |
+        xmake build
 
     - name: Run tests (Release)
-      working-directory: build-release
-      run: ctest --output-on-failure --verbose
+      run: |
+        xmake test
 
   clang-format:
     name: Code Formatting Check
@@ -58,4 +59,4 @@ jobs:
 
     - name: Check formatting
       run: |
-        find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | xargs clang-format-15 --dry-run --Werror
+        find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | grep -v _deps | xargs clang-format-15 --dry-run --Werror

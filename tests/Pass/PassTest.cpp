@@ -8,6 +8,8 @@
 
 using namespace midend;
 
+namespace {
+
 class PassTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -212,3 +214,5 @@ TEST_F(PassTest, BasicBlockPassOnFunction) {
     EXPECT_TRUE(found1);
     EXPECT_TRUE(found2);
 }
+
+}  // namespace

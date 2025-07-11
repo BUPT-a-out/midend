@@ -7,6 +7,8 @@
 
 using namespace midend;
 
+namespace {
+
 class InstructionTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -219,3 +221,5 @@ TEST_F(InstructionTest, InstructionMovement) {
     ++it;
     EXPECT_EQ(*it, inst2);
 }
+
+}  // namespace

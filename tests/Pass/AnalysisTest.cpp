@@ -9,6 +9,8 @@
 
 using namespace midend;
 
+namespace {
+
 class AnalysisTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -251,3 +253,5 @@ TEST_F(AnalysisTest, AnalysisFactoryPattern) {
     auto result = analysis->runOnFunction(*function);
     EXPECT_NE(result, nullptr);
 }
+
+}  // namespace

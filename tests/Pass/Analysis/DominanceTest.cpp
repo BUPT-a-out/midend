@@ -10,6 +10,8 @@
 
 using namespace midend;
 
+namespace {
+
 class DominanceTest : public ::testing::Test {
    protected:
     std::unique_ptr<Context> context;
@@ -989,3 +991,5 @@ TEST_F(DominanceTest, NestedDiamondPatterns) {
     EXPECT_EQ(level2.size(), 7u);  // innerLeft1, innerRight1, innerMerge1,
                                    // innerLeft2, innerRight2, innerMerge2, exit
 }
+
+}  // namespace

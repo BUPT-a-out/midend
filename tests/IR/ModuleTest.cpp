@@ -6,6 +6,8 @@
 
 using namespace midend;
 
+namespace {
+
 class ModuleTest : public ::testing::Test {
    protected:
     void SetUp() override { context = std::make_unique<Context>(); }
@@ -152,3 +154,5 @@ TEST_F(ModuleTest, ModulePrinting) {
         "; ModuleID = 'test_module'\ndeclare test_function\n";
     EXPECT_EQ(moduleStr, expected);
 }
+
+}  // namespace

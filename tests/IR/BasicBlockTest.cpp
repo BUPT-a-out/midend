@@ -8,6 +8,8 @@
 
 using namespace midend;
 
+namespace {
+
 class BasicBlockTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -234,3 +236,5 @@ TEST_F(BasicBlockTest, PredecessorCacheInvalidation) {
     EXPECT_EQ(preds3_after.size(), 1u);  // bb3 now has bb1 as predecessor
     EXPECT_EQ(preds3_after[0], bb1);
 }
+
+}  // namespace
