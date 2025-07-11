@@ -7,6 +7,8 @@
 
 using namespace midend;
 
+namespace {
+
 class IRBuilderTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -264,3 +266,5 @@ TEST_F(IRBuilderTest, PHIOperations) {
     EXPECT_EQ(phiInst->getIncomingBlock(0), bb1);
     EXPECT_EQ(phiInst->getIncomingBlock(1), bb2);
 }
+
+}  // namespace

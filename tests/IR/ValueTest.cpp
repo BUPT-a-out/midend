@@ -15,6 +15,8 @@
 
 using namespace midend;
 
+namespace {
+
 class ValueTest : public ::testing::Test {
    protected:
     void SetUp() override { context = std::make_unique<Context>(); }
@@ -192,7 +194,7 @@ TEST_F(ValueTest, ComplexUseDefChains) {
 
 TEST_F(ValueTest, MultipleUsersOfSameValue) {
     auto* int32Ty = context->getInt32Type();
-    auto* sharedVal = ConstantInt::get(int32Ty, 42);
+    auto* sharedVal = ConstantInt::get(int32Ty, 12345);
 
     class TestUser : public User {
        public:
@@ -207,7 +209,7 @@ TEST_F(ValueTest, MultipleUsersOfSameValue) {
     for (int i = 0; i < numUsers; ++i) {
         auto* user = new TestUser(int32Ty, 2);
         user->setOperand(0, sharedVal);
-        user->setOperand(1, ConstantInt::get(int32Ty, i));
+        user->setOperand(1, ConstantInt::get(int32Ty, 1000 + i));
         users.push_back(user);
     }
 
@@ -541,3 +543,5 @@ TEST_F(ValueTest, EdgeCasesAndErrorConditions) {
     delete singleUser;
     delete secondUser;
 }
+
+}  // namespace

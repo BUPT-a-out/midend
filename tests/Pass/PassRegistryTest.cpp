@@ -6,6 +6,8 @@
 
 using namespace midend;
 
+namespace {
+
 // Test pass for registry testing
 class TestPass : public ModulePass {
    public:
@@ -143,3 +145,5 @@ TEST_F(PassRegistryTest, PassReplacement) {
     auto pass2 = registry.createPass("replaceable");
     EXPECT_EQ(pass2->getName(), "AnotherTestPass");
 }
+
+}  // namespace

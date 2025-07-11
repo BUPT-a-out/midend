@@ -8,6 +8,8 @@
 
 using namespace midend;
 
+namespace {
+
 class MoveInstTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -144,3 +146,5 @@ TEST_F(MoveInstTest, MoveWithDifferentTypes) {
     delete intMove;
     delete floatMove;
 }
+
+}  // namespace

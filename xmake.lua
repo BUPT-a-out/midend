@@ -1,3 +1,5 @@
+add_rules("plugin.compile_commands.autoupdate", {outputdir = "."})
+
 target("midend")
     set_kind("static")
     set_languages("c++17")

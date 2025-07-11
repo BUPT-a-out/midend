@@ -9,6 +9,8 @@
 
 using namespace midend;
 
+namespace {
+
 class IRPrinterTest : public ::testing::Test {
    protected:
     void SetUp() override {
@@ -353,3 +355,5 @@ TEST_F(IRPrinterTest, PrintConstants) {
         "}\n";
     EXPECT_EQ(output, expected);
 }
+
+}  // namespace
