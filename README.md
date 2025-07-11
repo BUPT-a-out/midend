@@ -1,5 +1,7 @@
 # midend
 
+[![Build and Test](https://github.com/BUPT-a-out/midend/actions/workflows/ci.yml/badge.svg)](https://github.com/BUPT-a-out/midend/actions/workflows/ci.yml)
+
 Check [.github/workflows/ci.yml](.github/workflows/ci.yml) for building and testing instructions.
 
 ## IR 生成约定
