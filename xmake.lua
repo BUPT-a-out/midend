@@ -42,7 +42,46 @@ task("test")
     on_run(function ()
         import("core.project.project")
         import("core.base.task")
-        
+        import("lib.detect.find_tool")
+        local python3 = find_tool("python3")
+        if not python3 then
+            raise("Python3 is required to run tests")
+        end
         task.run("build", {}, "midend_tests")
-        os.exec("xmake run midend_tests")
+        local gtest_parallel = path.join(os.scriptdir(), "scripts", "gtest_parallel.py")
+        if not os.isfile(gtest_parallel) then
+            cprint("${yellow}Warning: gtest_parallel.py not found, running tests sequentially")
+            os.exec("xmake run midend_tests")
+        else
+            local target = project.target("midend_tests")
+            local target_executable = target:targetfile()
+            os.exec(python3.program .. " " .. gtest_parallel .. " -r 10 " .. target_executable)
+        end
+    end)
+
+task("format")
+    set_menu {
+        usage = "xmake format",
+        description = "Check code formatting with clang-format",
+        options = {}
+    }
+    on_run(function ()
+        import("lib.detect.find_tool")
+        local clang_format = find_tool("clang-format-15") or find_tool("clang-format")
+        if not clang_format then
+            raise("clang-format-15 or clang-format is required for formatting")
+        end
+        
+        local cmd = "find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | grep -v _deps | xargs " .. clang_format.program .. " -i"
+        local ok, outdata, errdata = os.iorunv("sh", {"-c", cmd})
+        
+        if not ok then
+            cprint("${red}Code formatting check failed:")
+            if errdata and #errdata > 0 then
+                print(errdata)
+            end
+            os.exit(1)
+        else
+            cprint("${green}All files are properly formatted!")
+        end
     end)

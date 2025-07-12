@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iostream>
 #include <queue>
+#include <stack>
+#include <unordered_set>
 
 namespace midend {
 
@@ -22,21 +24,18 @@ void DominanceInfo::computeDominators() {
     if (function_->empty()) return;
 
     auto* entry = &function_->front();
-    BBVector allBlocks;
 
-    // Collect all basic blocks
-    // TODO: using RPO would be more efficient:
-    // https://github.com/BUPT-a-out/midend/issues/3
-    for (auto& BB : *function_) {
-        allBlocks.push_back(BB);
+    BBVector rpoBlocks = computeReversePostOrder();
+
+    for (auto* BB : rpoBlocks) {
         dominators_[BB] = BBSet();
     }
 
     // Initialize: entry dominates only itself, others dominate all
     dominators_[entry].insert(entry);
-    for (auto* BB : allBlocks) {
+    for (auto* BB : rpoBlocks) {
         if (BB != entry) {
-            dominators_[BB] = BBSet(allBlocks.begin(), allBlocks.end());
+            dominators_[BB] = BBSet(rpoBlocks.begin(), rpoBlocks.end());
         }
     }
 
@@ -44,7 +43,7 @@ void DominanceInfo::computeDominators() {
     while (changed) {
         changed = false;
 
-        for (auto* BB : allBlocks) {
+        for (auto* BB : rpoBlocks) {
             if (BB == entry) continue;
 
             BBSet newDominators;
@@ -350,6 +349,43 @@ void DominatorTree::printNode(Node* node, int indent) const {
     for (auto& child : node->children) {
         printNode(child.get(), indent + 1);
     }
+}
+
+DominanceInfo::BBVector DominanceInfo::computeReversePostOrder() const {
+    if (function_->empty()) return {};
+
+    BBVector postOrder;
+    std::unordered_set<BasicBlock*> visited;
+
+    std::stack<std::pair<BasicBlock*, bool>> stack;
+    auto* entry = &function_->front();
+    stack.push({entry, false});
+
+    while (!stack.empty()) {
+        auto current = stack.top();
+        stack.pop();
+        auto* bb = current.first;
+        bool processed = current.second;
+
+        if (processed) {
+            postOrder.push_back(bb);
+        } else {
+            if (visited.count(bb)) continue;
+            visited.insert(bb);
+
+            stack.push({bb, true});
+
+            auto successors = bb->getSuccessors();
+            for (auto it = successors.rbegin(); it != successors.rend(); ++it) {
+                if (!visited.count(*it)) {
+                    stack.push({*it, false});
+                }
+            }
+        }
+    }
+
+    std::reverse(postOrder.begin(), postOrder.end());
+    return postOrder;
 }
 
 }  // namespace midend

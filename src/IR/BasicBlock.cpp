@@ -8,8 +8,7 @@
 namespace midend {
 
 BasicBlock::BasicBlock(Context* ctx, const std::string& name, Function* parent)
-    : Value(LabelType::get(ctx), ValueKind::BasicBlock, name),
-      parent_(nullptr) {
+    : Value(LabelType::get(ctx), ValueKind::BasicBlock, name), parent_(parent) {
     if (parent) {
         parent->push_back(this);
     }

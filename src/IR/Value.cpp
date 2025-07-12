@@ -6,6 +6,16 @@
 
 namespace midend {
 
+Value::~Value() {
+    while (useListHead_) {
+        Use* use = useListHead_;
+        useListHead_ = use->next_;
+        use->value_ = nullptr;
+        use->next_ = nullptr;
+        use->prev_ = nullptr;
+    }
+}
+
 Value::use_iterator& Value::use_iterator::operator++() {
     current_ = current_->next_;
     return *this;

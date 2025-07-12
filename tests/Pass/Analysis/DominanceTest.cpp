@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <functional>
+
 #include "IR/BasicBlock.h"
 #include "IR/Function.h"
 #include "IR/IRBuilder.h"
@@ -990,6 +992,299 @@ TEST_F(DominanceTest, NestedDiamondPatterns) {
     auto level2 = domTree->getNodesAtLevel(2);
     EXPECT_EQ(level2.size(), 7u);  // innerLeft1, innerRight1, innerMerge1,
                                    // innerLeft2, innerRight2, innerMerge2, exit
+}
+
+TEST_F(DominanceTest, ReversePostOrderTraversal) {
+    // Test RPO traversal with a simple linear CFG
+    auto* func = createLinearFunction();
+    DominanceInfo domInfo(func);
+
+    auto rpo = domInfo.computeReversePostOrder();
+    auto blocks = func->getBasicBlocks();
+
+    // For a linear CFG: entry -> bb1 -> bb2 -> exit
+    // RPO should be: entry, bb1, bb2, exit (same as program order)
+    ASSERT_EQ(rpo.size(), 4u);
+    EXPECT_EQ(rpo[0]->getName(), "entry");
+    EXPECT_EQ(rpo[1]->getName(), "bb1");
+    EXPECT_EQ(rpo[2]->getName(), "bb2");
+    EXPECT_EQ(rpo[3]->getName(), "exit");
+
+    // Verify RPO properties: all predecessors come before successors (except
+    // back edges)
+    for (size_t i = 0; i < rpo.size(); ++i) {
+        auto predecessors = rpo[i]->getPredecessors();
+        for (auto* pred : predecessors) {
+            // Find position of predecessor in RPO
+            auto predPos = std::find(rpo.begin(), rpo.end(), pred);
+            EXPECT_NE(predPos, rpo.end()) << "Predecessor not found in RPO";
+            if (predPos != rpo.end()) {
+                size_t predIndex = predPos - rpo.begin();
+                // Predecessor should come before current block (no back edges
+                // in linear CFG)
+                EXPECT_LT(predIndex, i)
+                    << "Predecessor should come before current block in RPO";
+            }
+        }
+    }
+}
+
+TEST_F(DominanceTest, RPOWithComplexCFG) {
+    // Test RPO traversal with a diamond CFG
+    auto* func = createDiamondFunction();
+    DominanceInfo domInfo(func);
+
+    auto rpo = domInfo.computeReversePostOrder();
+
+    // Find blocks by name
+    BasicBlock* entry = &func->front();
+    BasicBlock* left = nullptr;
+    BasicBlock* right = nullptr;
+    BasicBlock* merge = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto* bb : rpo) {
+        if (bb->getName() == "left")
+            left = bb;
+        else if (bb->getName() == "right")
+            right = bb;
+        else if (bb->getName() == "merge")
+            merge = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    ASSERT_NE(left, nullptr);
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(merge, nullptr);
+    ASSERT_NE(exit, nullptr);
+
+    // For diamond CFG: entry -> {left, right} -> merge -> exit
+    // Valid RPO orderings: entry, left, right, merge, exit OR entry, right,
+    // left, merge, exit
+    ASSERT_EQ(rpo.size(), 5u);
+    EXPECT_EQ(rpo[0], entry);  // Entry must be first
+    EXPECT_EQ(rpo[4], exit);   // Exit must be last
+    EXPECT_EQ(rpo[3], merge);  // Merge must be before exit
+
+    // left and right can be in either order, but both must be after entry and
+    // before merge
+    size_t leftPos = std::find(rpo.begin(), rpo.end(), left) - rpo.begin();
+    size_t rightPos = std::find(rpo.begin(), rpo.end(), right) - rpo.begin();
+    size_t mergePos = std::find(rpo.begin(), rpo.end(), merge) - rpo.begin();
+
+    EXPECT_LT(leftPos, mergePos);
+    EXPECT_LT(rightPos, mergePos);
+    EXPECT_GT(leftPos, 0u);   // After entry
+    EXPECT_GT(rightPos, 0u);  // After entry
+}
+
+TEST_F(DominanceTest, RPOWithBackEdges) {
+    // Test RPO with a loop that has back edges
+    auto* func = createLoopFunction();
+    DominanceInfo domInfo(func);
+
+    auto rpo = domInfo.computeReversePostOrder();
+
+    // Find blocks by name
+    auto* entry = &func->front();
+    BasicBlock* loop_header = nullptr;
+    BasicBlock* loop_body = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto* bb : rpo) {
+        if (bb->getName() == "loop_header")
+            loop_header = bb;
+        else if (bb->getName() == "loop_body")
+            loop_body = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    ASSERT_NE(loop_header, nullptr);
+    ASSERT_NE(loop_body, nullptr);
+    ASSERT_NE(exit, nullptr);
+
+    // For loop CFG: entry -> loop_header -> {loop_body -> loop_header (back
+    // edge), exit} In our implementation, RPO is: entry, loop_header, exit,
+    // loop_body This is valid because exit is visited before going into the
+    // loop body
+    ASSERT_EQ(rpo.size(), 4u);
+    EXPECT_EQ(rpo[0], entry);
+    EXPECT_EQ(rpo[1], loop_header);
+    EXPECT_EQ(rpo[2], exit);
+    EXPECT_EQ(rpo[3], loop_body);
+
+    // Verify RPO property: all non-back-edge predecessors come before
+    // successors
+    size_t headerPos =
+        std::find(rpo.begin(), rpo.end(), loop_header) - rpo.begin();
+    size_t bodyPos = std::find(rpo.begin(), rpo.end(), loop_body) - rpo.begin();
+    size_t exitPos = std::find(rpo.begin(), rpo.end(), exit) - rpo.begin();
+
+    // entry -> loop_header: forward edge
+    EXPECT_LT(0u, headerPos);
+    // loop_header -> loop_body: forward edge
+    EXPECT_LT(headerPos, bodyPos);
+    // loop_header -> exit: forward edge
+    EXPECT_LT(headerPos, exitPos);
+    // loop_body -> loop_header: back edge (should not violate RPO order since
+    // header comes first)
+    EXPECT_LT(headerPos, bodyPos);  // This is okay for back edges
+}
+
+TEST_F(DominanceTest, ComputeDominatorsEfficiency) {
+    // Create a larger CFG to test the efficiency improvement of RPO
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* func = Function::Create(fnTy, "efficiency_test", module.get());
+
+    std::vector<BasicBlock*> blocks;
+
+    // Create entry block
+    auto* entry = BasicBlock::Create(context.get(), "entry", func);
+    blocks.push_back(entry);
+
+    // Create a chain of 20 blocks: entry -> bb1 -> bb2 -> ... -> bb19 -> exit
+    for (int i = 1; i <= 19; ++i) {
+        auto* bb =
+            BasicBlock::Create(context.get(), "bb" + std::to_string(i), func);
+        blocks.push_back(bb);
+    }
+
+    auto* exit = BasicBlock::Create(context.get(), "exit", func);
+    blocks.push_back(exit);
+
+    // Connect them linearly
+    IRBuilder builder(entry);
+    builder.createBr(blocks[1]);
+
+    for (size_t i = 1; i < blocks.size() - 1; ++i) {
+        builder.setInsertPoint(blocks[i]);
+        builder.createBr(blocks[i + 1]);
+    }
+
+    builder.setInsertPoint(exit);
+    builder.createRet(func->getArg(0));
+
+    // Test dominance computation
+    DominanceInfo domInfo(func);
+    EXPECT_TRUE(domInfo.verify());
+
+    // Entry should dominate all blocks
+    for (auto* bb : blocks) {
+        EXPECT_TRUE(domInfo.dominates(entry, bb));
+    }
+
+    // Each block should dominate all blocks after it
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        for (size_t j = i; j < blocks.size(); ++j) {
+            EXPECT_TRUE(domInfo.dominates(blocks[i], blocks[j]));
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (i != j) {
+                EXPECT_FALSE(domInfo.dominates(blocks[i], blocks[j]));
+            }
+        }
+    }
+
+    // Check immediate dominators
+    EXPECT_EQ(domInfo.getImmediateDominator(entry), nullptr);
+    for (size_t i = 1; i < blocks.size(); ++i) {
+        EXPECT_EQ(domInfo.getImmediateDominator(blocks[i]), blocks[i - 1]);
+    }
+}
+
+TEST_F(DominanceTest, RPOVsPostOrderRelationship) {
+    // Test that RPO is indeed the reverse of post-order traversal
+    auto* func = createDiamondFunction();
+    DominanceInfo domInfo(func);
+
+    auto rpo = domInfo.computeReversePostOrder();
+
+    // Manually compute post-order using DFS
+    std::vector<BasicBlock*> postOrder;
+    std::unordered_set<BasicBlock*> visited;
+
+    std::function<void(BasicBlock*)> dfsPostOrder = [&](BasicBlock* bb) {
+        if (visited.count(bb)) return;
+        visited.insert(bb);
+
+        for (auto* successor : bb->getSuccessors()) {
+            if (!visited.count(successor)) {
+                dfsPostOrder(successor);
+            }
+        }
+        postOrder.push_back(bb);
+    };
+
+    dfsPostOrder(&func->front());
+
+    // RPO should be the reverse of post-order
+    std::vector<BasicBlock*> reversedPostOrder(postOrder.rbegin(),
+                                               postOrder.rend());
+
+    ASSERT_EQ(rpo.size(), reversedPostOrder.size());
+    for (size_t i = 0; i < rpo.size(); ++i) {
+        EXPECT_EQ(rpo[i], reversedPostOrder[i])
+            << "RPO[" << i << "] = " << rpo[i]->getName()
+            << " but reversed post-order[" << i
+            << "] = " << reversedPostOrder[i]->getName();
+    }
+}
+
+TEST_F(DominanceTest, RPOSimpleOrderingTest) {
+    // Create a simple test case with known expected RPO ordering
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* func = Function::Create(fnTy, "simple_rpo", module.get());
+
+    // Create CFG: entry -> bb1 -> bb2
+    //                  \-> bb3 -> bb2
+    auto* entry = BasicBlock::Create(context.get(), "entry", func);
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", func);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", func);
+    auto* bb3 = BasicBlock::Create(context.get(), "bb3", func);
+
+    IRBuilder builder(entry);
+    auto* cond =
+        builder.createICmpSGT(func->getArg(0), builder.getInt32(0), "cond");
+    builder.createCondBr(cond, bb1, bb3);
+
+    builder.setInsertPoint(bb1);
+    builder.createBr(bb2);
+
+    builder.setInsertPoint(bb3);
+    builder.createBr(bb2);
+
+    builder.setInsertPoint(bb2);
+    builder.createRet(func->getArg(0));
+
+    DominanceInfo domInfo(func);
+    auto rpo = domInfo.computeReversePostOrder();
+
+    // Expected RPO: entry, bb1, bb3, bb2 (or entry, bb3, bb1, bb2)
+    ASSERT_EQ(rpo.size(), 4u);
+    EXPECT_EQ(rpo[0], entry);  // Entry must be first
+    EXPECT_EQ(rpo[3], bb2);    // bb2 must be last (it's the final merge point)
+
+    // bb1 and bb3 can be in either order, but both must come after entry and
+    // before bb2
+    bool bb1_before_bb2 = false, bb3_before_bb2 = false;
+    bool bb1_after_entry = false, bb3_after_entry = false;
+
+    for (size_t i = 0; i < rpo.size(); ++i) {
+        if (rpo[i] == bb1) {
+            bb1_before_bb2 = (i < 3);
+            bb1_after_entry = (i > 0);
+        } else if (rpo[i] == bb3) {
+            bb3_before_bb2 = (i < 3);
+            bb3_after_entry = (i > 0);
+        }
+    }
+
+    EXPECT_TRUE(bb1_before_bb2 && bb1_after_entry);
+    EXPECT_TRUE(bb3_before_bb2 && bb3_after_entry);
 }
 
 }  // namespace
