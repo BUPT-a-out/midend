@@ -32,7 +32,6 @@ target("midend")
     before_build(function (target)
         local hooks_dir = path.join(os.scriptdir(), ".git", "hooks")
         local pre_commit_path = path.join(hooks_dir, "pre-commit")
-        
         if os.isdir(hooks_dir) then
             local expected_hook_content = [[#!/bin/sh
 # Auto-generated pre-commit hook by xmake
@@ -45,8 +44,9 @@ if ! xmake test; then
 fi
 
 echo "Checking code formatting..."
-if ! xmake format; then
+if ! xmake format --check; then
     echo "Code formatting check failed! Commit aborted."
+    echo "Please run 'xmake format' to fix formatting issues."
     exit 1
 fi
 
@@ -107,16 +107,24 @@ task("format")
     set_menu {
         usage = "xmake format",
         description = "Check code formatting with clang-format",
-        options = {}
+        options = {
+            {'c', "check", "k", false, "Run clang-format in dry-run mode to check formatting without making changes."},
+        }
     }
     on_run(function ()
         import("lib.detect.find_tool")
+        import("core.base.option")
         local clang_format = find_tool("clang-format-15") or find_tool("clang-format")
         if not clang_format then
             raise("clang-format-15 or clang-format is required for formatting")
         end
         
-        local cmd = "find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | grep -v _deps | xargs " .. clang_format.program .. " -i"
+        local cmd = "find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | grep -v _deps | xargs " .. clang_format.program
+        if option.get("check") then
+            cmd = cmd .. " --dry-run --Werror"
+        else
+            cmd = cmd .. " -i"
+        end
         local ok, outdata, errdata = os.iorunv("sh", {"-c", cmd})
         
         if not ok then
