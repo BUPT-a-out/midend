@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include <functional>
 #include <algorithm>
+#include <functional>
 
 #include "IR/BasicBlock.h"
 #include "IR/Function.h"
