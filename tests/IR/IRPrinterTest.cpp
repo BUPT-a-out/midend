@@ -34,7 +34,7 @@ TEST_F(IRPrinterTest, PrintFunctionDeclaration) {
     auto* func = Function::Create(fnTy, "add", module.get());
 
     std::string output = IRPrinter::toString(func);
-    std::string expected = "define i32 @add(i32 %0, i32 %1)\n";
+    std::string expected = "define i32 @add(i32 %arg0, i32 %arg1)\n";
     EXPECT_EQ(output, expected);
 }
 
@@ -53,9 +53,9 @@ TEST_F(IRPrinterTest, PrintSimpleFunction) {
 
     // Verify exact IR structure
     std::string expected =
-        "define i32 @add(i32 %0, i32 %1) {\n"
+        "define i32 @add(i32 %arg0, i32 %arg1) {\n"
         "entry:\n"
-        "  %sum = add i32 %0, %1\n"
+        "  %sum = add i32 %arg0, %arg1\n"
         "  ret i32 %sum\n"
         "}\n";
     EXPECT_EQ(output, expected);
@@ -194,9 +194,9 @@ TEST_F(IRPrinterTest, PrintControlFlow) {
 
     // Verify exact IR structure
     std::string expected =
-        "define i32 @control_flow(i1 %0) {\n"
+        "define i32 @control_flow(i1 %arg0) {\n"
         "entry:\n"
-        "  br i1 %0, label %then, label %else\n"
+        "  br i1 %arg0, label %then, label %else\n"
         "then:\n"
         "  br label %merge\n"
         "else:\n"
@@ -255,9 +255,9 @@ TEST_F(IRPrinterTest, PrintCompleteModule) {
         "entry:\n"
         "  ret i32 0\n"
         "}\n\n"
-        "define i32 @add(i32 %0, i32 %1) {\n"
+        "define i32 @add(i32 %arg0, i32 %arg1) {\n"
         "entry:\n"
-        "  %sum = add i32 %0, %1\n"
+        "  %sum = add i32 %arg0, %arg1\n"
         "  ret i32 %sum\n"
         "}\n\n";
     EXPECT_EQ(output, expected);
@@ -354,6 +354,131 @@ TEST_F(IRPrinterTest, PrintConstants) {
         "  ret void\n"
         "}\n";
     EXPECT_EQ(output, expected);
+}
+
+TEST_F(IRPrinterTest, PrintNamedParameters) {
+    auto* int32Ty = context->getInt32Type();
+    std::vector<Type*> params = {int32Ty, int32Ty, int32Ty};
+    auto* fnTy = FunctionType::get(int32Ty, params);
+
+    // Test function with named parameters
+    std::vector<std::string> paramNames = {"width", "height", "depth"};
+    auto* func =
+        Function::Create(fnTy, "calculate_volume", paramNames, module.get());
+
+    std::string output = IRPrinter::toString(func);
+
+    // IRPrinter now uses actual parameter names
+    std::string expected =
+        "define i32 @calculate_volume(i32 %width, i32 %height, i32 %depth)\n";
+    EXPECT_EQ(output, expected);
+
+    // Verify that arguments actually have the correct names internally
+    EXPECT_EQ(func->getArg(0)->getName(), "width");
+    EXPECT_EQ(func->getArg(1)->getName(), "height");
+    EXPECT_EQ(func->getArg(2)->getName(), "depth");
+}
+
+TEST_F(IRPrinterTest, PrintNamedParametersInFunctionBody) {
+    auto* int32Ty = context->getInt32Type();
+    std::vector<Type*> params = {int32Ty, int32Ty};
+    auto* fnTy = FunctionType::get(int32Ty, params);
+
+    // Create function with named parameters
+    std::vector<std::string> paramNames = {"x", "y"};
+    auto* func = Function::Create(fnTy, "multiply", paramNames, module.get());
+
+    auto* entry = BasicBlock::Create(context.get(), "entry", func);
+    IRBuilder builder(entry);
+
+    // Use the named arguments
+    auto* result =
+        builder.createMul(func->getArg(0), func->getArg(1), "product");
+    builder.createRet(result);
+
+    std::string output = IRPrinter::toString(func);
+
+    // Arguments now use their actual names in both signature and references
+    std::string expected =
+        "define i32 @multiply(i32 %x, i32 %y) {\n"
+        "entry:\n"
+        "  %product = mul i32 %x, %y\n"
+        "  ret i32 %product\n"
+        "}\n";
+    EXPECT_EQ(output, expected);
+
+    // Verify named access still works
+    auto* argX = func->getArgByName("x");
+    auto* argY = func->getArgByName("y");
+    EXPECT_EQ(argX, func->getArg(0));
+    EXPECT_EQ(argY, func->getArg(1));
+}
+
+TEST_F(IRPrinterTest, PrintPartialNamedParameters) {
+    auto* int32Ty = context->getInt32Type();
+    std::vector<Type*> params = {int32Ty, int32Ty, int32Ty};
+    auto* fnTy = FunctionType::get(int32Ty, params);
+
+    // Test function with partial named parameters
+    std::vector<std::string> paramNames = {"base", "", "exponent"};
+    auto* func = Function::Create(fnTy, "power_func", paramNames, module.get());
+
+    std::string output = IRPrinter::toString(func);
+
+    // Mixed: named parameters use names, unnamed ones use indices
+    std::string expected =
+        "define i32 @power_func(i32 %base, i32 %arg1, i32 %exponent)\n";
+    EXPECT_EQ(output, expected);
+
+    // Verify internal names are correct
+    EXPECT_EQ(func->getArg(0)->getName(), "base");
+    EXPECT_EQ(func->getArg(1)->getName(),
+              "arg1");  // Default name for empty string
+    EXPECT_EQ(func->getArg(2)->getName(), "exponent");
+}
+
+TEST_F(IRPrinterTest, PrintRuntimeNamedParameters) {
+    auto* int32Ty = context->getInt32Type();
+    std::vector<Type*> params = {int32Ty, int32Ty};
+    auto* fnTy = FunctionType::get(int32Ty, params);
+
+    // Create function with default names
+    auto* func = Function::Create(fnTy, "add_numbers", module.get());
+
+    // Set names at runtime
+    func->setArgName(0, "first");
+    func->setArgName(1, "second");
+
+    std::string output = IRPrinter::toString(func);
+
+    // Parameters now show the runtime-assigned names
+    std::string expected = "define i32 @add_numbers(i32 %first, i32 %second)\n";
+    EXPECT_EQ(output, expected);
+
+    // Verify runtime naming worked
+    EXPECT_EQ(func->getArg(0)->getName(), "first");
+    EXPECT_EQ(func->getArg(1)->getName(), "second");
+    EXPECT_EQ(func->getArgByName("first"), func->getArg(0));
+    EXPECT_EQ(func->getArgByName("second"), func->getArg(1));
+}
+
+TEST_F(IRPrinterTest, PrintDefaultParameterNames) {
+    auto* int32Ty = context->getInt32Type();
+    std::vector<Type*> params = {int32Ty, int32Ty};
+    auto* fnTy = FunctionType::get(int32Ty, params);
+
+    // Create function with default parameter names (arg0, arg1)
+    auto* func = Function::Create(fnTy, "default_args", module.get());
+
+    std::string output = IRPrinter::toString(func);
+
+    // Parameters with default names are printed with those names
+    std::string expected = "define i32 @default_args(i32 %arg0, i32 %arg1)\n";
+    EXPECT_EQ(output, expected);
+
+    // Verify default names
+    EXPECT_EQ(func->getArg(0)->getName(), "arg0");
+    EXPECT_EQ(func->getArg(1)->getName(), "arg1");
 }
 
 }  // namespace

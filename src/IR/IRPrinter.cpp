@@ -63,9 +63,12 @@ std::string IRPrinter::getValueName(const Value* v) {
     }
 
     // Local values use % prefix
-    // For function arguments, use the argument index within the function
     if (auto* arg = dyn_cast<Argument>(v)) {
-        return "%" + std::to_string(arg->getArgNo());
+        if (arg->hasName()) {
+            return "%" + arg->getName();
+        } else {
+            return "%" + std::to_string(arg->getArgNo());
+        }
     }
 
     if (v->hasName()) {
