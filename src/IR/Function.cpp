@@ -21,6 +21,26 @@ Function::Function(FunctionType* ty, const std::string& name, Module* parent)
     }
 }
 
+Function::Function(FunctionType* ty, const std::string& name,
+                   const std::vector<std::string>& paramNames, Module* parent)
+    : Constant(ty, ValueKind::Function), parent_(parent), isDeclaration_(true) {
+    setName(name);
+
+    if (parent_) {
+        parent_->push_back(this);
+    }
+
+    const auto& paramTypes = ty->getParamTypes();
+    arguments_.reserve(paramTypes.size());
+    for (size_t i = 0; i < paramTypes.size(); ++i) {
+        std::string argName = (i < paramNames.size() && !paramNames[i].empty())
+                                  ? paramNames[i]
+                                  : "arg" + std::to_string(i);
+        arguments_.push_back(
+            std::make_unique<Argument>(paramTypes[i], argName, this, i));
+    }
+}
+
 Function::~Function() {
     for (auto* bb : basicBlocks_) {
         delete bb;
@@ -118,6 +138,12 @@ std::vector<BasicBlock*> Function::getBasicBlocks() const {
 Function* Function::Create(FunctionType* ty, const std::string& name,
                            Module* parent) {
     return new Function(ty, name, parent);
+}
+
+Function* Function::Create(FunctionType* ty, const std::string& name,
+                           const std::vector<std::string>& paramNames,
+                           Module* parent) {
+    return new Function(ty, name, paramNames, parent);
 }
 
 }  // namespace midend

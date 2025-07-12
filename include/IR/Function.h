@@ -44,6 +44,9 @@ class Function : public Constant {
    public:
     Function(FunctionType* ty, const std::string& name,
              Module* parent = nullptr);
+    Function(FunctionType* ty, const std::string& name,
+             const std::vector<std::string>& paramNames,
+             Module* parent = nullptr);
     ~Function();
 
     using iterator = std::list<BasicBlock*>::iterator;
@@ -83,6 +86,19 @@ class Function : public Constant {
     Argument* getArg(unsigned i) {
         return i < arguments_.size() ? arguments_[i].get() : nullptr;
     }
+    Argument* getArgByName(const std::string& name) {
+        for (auto& arg : arguments_) {
+            if (arg->getName() == name) {
+                return arg.get();
+            }
+        }
+        return nullptr;
+    }
+    void setArgName(unsigned i, const std::string& name) {
+        if (i < arguments_.size()) {
+            arguments_[i]->setName(name);
+        }
+    }
 
     bool isDeclaration() const { return isDeclaration_; }
     bool isDefinition() const { return !isDeclaration_; }
@@ -103,6 +119,9 @@ class Function : public Constant {
     std::vector<BasicBlock*> getBasicBlocks() const;
 
     static Function* Create(FunctionType* ty, const std::string& name,
+                            Module* parent = nullptr);
+    static Function* Create(FunctionType* ty, const std::string& name,
+                            const std::vector<std::string>& paramNames,
                             Module* parent = nullptr);
 
     static bool classof(const Value* v) {
