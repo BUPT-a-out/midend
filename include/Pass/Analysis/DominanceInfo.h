@@ -66,6 +66,9 @@ class DominanceInfo : public AnalysisResult {
 
     /// Get the function this dominance info is for
     Function* getFunction() const { return function_; }
+
+    /// Compute reverse post-order traversal of the CFG
+    BBVector computeReversePostOrder() const;
 };
 
 /// Represents the dominator tree structure

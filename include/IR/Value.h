@@ -25,7 +25,7 @@ class Value {
         : type_(ty), useListHead_(nullptr), name_(name), valueKind_(kind) {}
 
    public:
-    virtual ~Value() = default;
+    virtual ~Value();
 
     Type* getType() const { return type_; }
     ValueKind getValueKind() const { return valueKind_; }
