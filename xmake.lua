@@ -28,6 +28,50 @@ target("midend")
         set_symbols("hidden")
         set_optimize("fastest")
     end
+    
+    before_build(function (target)
+        local hooks_dir = path.join(os.scriptdir(), ".git", "hooks")
+        local pre_commit_path = path.join(hooks_dir, "pre-commit")
+        
+        if os.isdir(hooks_dir) then
+            local expected_hook_content = [[#!/bin/sh
+# Auto-generated pre-commit hook by xmake
+# This hook runs tests and formatting checks before committing
+
+echo "Running tests..."
+if ! xmake test; then
+    echo "Tests failed! Commit aborted."
+    exit 1
+fi
+
+echo "Checking code formatting..."
+if ! xmake format; then
+    echo "Code formatting check failed! Commit aborted."
+    exit 1
+fi
+
+echo "All checks passed!"
+]]
+            
+            local should_write = false
+            if not os.isfile(pre_commit_path) then
+                cprint("${yellow}No git pre-commit hook found. Setting up automatically...")
+                should_write = true
+            else
+                local current_content = io.readfile(pre_commit_path)
+                if current_content ~= expected_hook_content then
+                    cprint("${yellow}Existing pre-commit hook differs from expected. Updating...")
+                    should_write = true
+                end
+            end
+            
+            if should_write then
+                io.writefile(pre_commit_path, expected_hook_content)
+                os.exec("chmod +x " .. pre_commit_path)
+                cprint("${green}Git pre-commit hook has been set up automatically!")
+            end
+        end
+    end)
 
 if os.isdir(path.join(os.scriptdir(), "tests")) then
     includes("tests/xmake.lua")
@@ -43,20 +87,20 @@ task("test")
         import("core.project.project")
         import("core.base.task")
         import("lib.detect.find_tool")
+        import("net.http")
         local python3 = find_tool("python3")
         if not python3 then
             raise("Python3 is required to run tests")
         end
-        task.run("build", {}, "midend_tests")
-        local gtest_parallel = path.join(os.scriptdir(), "scripts", "gtest_parallel.py")
+        task.run("build", {target = "midend_tests"})
+        local target = project.target("midend_tests")
+        local target_executable = path.absolute(target:targetfile())
+        local gtest_parallel = path.join(target:targetdir(), "scripts", "gtest_parallel.py")
         if not os.isfile(gtest_parallel) then
-            cprint("${yellow}Warning: gtest_parallel.py not found, running tests sequentially")
-            os.exec("xmake run midend_tests")
-        else
-            local target = project.target("midend_tests")
-            local target_executable = target:targetfile()
-            os.exec(python3.program .. " " .. gtest_parallel .. " -r 10 " .. target_executable)
+            cprint("${blue}gtest_parallel.py not found, downloading...")
+            http.download("https://raw.githubusercontent.com/google/gtest-parallel/refs/heads/master/gtest_parallel.py", gtest_parallel)
         end
+        os.exec(python3.program .. " " .. gtest_parallel .. " -r 10 " .. target_executable)
     end)
 
 task("format")
