@@ -54,6 +54,7 @@ TEST_F(Mem2RegTest, SimpleAllocaPromoted) {
     // Verify that alloca and load/store are removed
     bool hasAlloca = false;
     bool hasLoadStore = false;
+    Instruction* retInst = nullptr;
 
     for (auto& bb : *func) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
@@ -63,11 +64,22 @@ TEST_F(Mem2RegTest, SimpleAllocaPromoted) {
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) {
                 hasLoadStore = true;
             }
+            if (isa<ReturnInst>(*it)) {
+                retInst = *it;
+            }
         }
     }
 
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
+    
+    // Verify the return value is the constant 42 (register allocation correctness)
+    ASSERT_NE(retInst, nullptr);
+    auto retValue = cast<ReturnInst>(retInst)->getReturnValue();
+    ASSERT_NE(retValue, nullptr);
+    auto constInt = dyn_cast<ConstantInt>(retValue);
+    ASSERT_NE(constInt, nullptr);
+    EXPECT_EQ(constInt->getValue(), 42);
 }
 
 // Basic edge case tests
@@ -97,14 +109,24 @@ TEST_F(Mem2RegTest, AllocaWithMultipleStores) {
     // Should be promoted - last store value should be used
     bool hasAlloca = false;
     bool hasLoadStore = false;
+    Instruction* retInst = nullptr;
     for (auto& bb : *func) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if (isa<AllocaInst>(*it)) hasAlloca = true;
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) hasLoadStore = true;
+            if (isa<ReturnInst>(*it)) retInst = *it;
         }
     }
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
+    
+    // Verify the return value is 30 (last stored value - register allocation correctness)
+    ASSERT_NE(retInst, nullptr);
+    auto retValue = cast<ReturnInst>(retInst)->getReturnValue();
+    ASSERT_NE(retValue, nullptr);
+    auto constInt = dyn_cast<ConstantInt>(retValue);
+    ASSERT_NE(constInt, nullptr);
+    EXPECT_EQ(constInt->getValue(), 30);
 }
 
 TEST_F(Mem2RegTest, AllocaWithUnusedLoad) {
@@ -131,14 +153,24 @@ TEST_F(Mem2RegTest, AllocaWithUnusedLoad) {
 
     bool hasAlloca = false;
     bool hasLoadStore = false;
+    Instruction* retInst = nullptr;
     for (auto& bb : *func) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if (isa<AllocaInst>(*it)) hasAlloca = true;
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) hasLoadStore = true;
+            if (isa<ReturnInst>(*it)) retInst = *it;
         }
     }
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
+    
+    // Verify the return value is still 100 (dead store elimination)
+    ASSERT_NE(retInst, nullptr);
+    auto retValue = cast<ReturnInst>(retInst)->getReturnValue();
+    ASSERT_NE(retValue, nullptr);
+    auto constInt = dyn_cast<ConstantInt>(retValue);
+    ASSERT_NE(constInt, nullptr);
+    EXPECT_EQ(constInt->getValue(), 100);
 }
 
 TEST_F(Mem2RegTest, MultipleAllocasInSameFunction) {
@@ -174,14 +206,25 @@ TEST_F(Mem2RegTest, MultipleAllocasInSameFunction) {
 
     bool hasAlloca = false;
     bool hasLoadStore = false;
+    Instruction* retInst = nullptr;
     for (auto& bb : *func) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if (isa<AllocaInst>(*it)) hasAlloca = true;
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) hasLoadStore = true;
+            if (isa<ReturnInst>(*it)) retInst = *it;
         }
     }
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
+    
+    // Verify the return value is 60 (10 + 20 + 30 - register allocation correctness)
+    ASSERT_NE(retInst, nullptr);
+    auto retValue = cast<ReturnInst>(retInst)->getReturnValue();
+    ASSERT_NE(retValue, nullptr);
+    // The return value should be a constant result of 10 + 20 + 30 = 60
+    auto constInt = dyn_cast<ConstantInt>(retValue);
+    ASSERT_NE(constInt, nullptr);
+    EXPECT_EQ(constInt->getValue(), 60);
 }
 
 // Simple if-else tests
@@ -225,17 +268,53 @@ TEST_F(Mem2RegTest, SimpleIfElseWithAlloca) {
     // Should be promoted with PHI node
     bool hasAlloca = false;
     bool hasLoadStore = false;
-    bool hasPhi = false;
+    PHINode* phiNode = nullptr;
+    Instruction* retInst = nullptr;
     for (auto& bb : *func) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if (isa<AllocaInst>(*it)) hasAlloca = true;
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) hasLoadStore = true;
-            if (isa<PHINode>(*it)) hasPhi = true;
+            if (auto phi = dyn_cast<PHINode>(*it)) {
+                phiNode = phi;
+            }
+            if (isa<ReturnInst>(*it)) retInst = *it;
         }
     }
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
-    EXPECT_TRUE(hasPhi);
+    ASSERT_NE(phiNode, nullptr);
+    
+    // Verify PHI node correctness
+    EXPECT_EQ(phiNode->getNumIncomingValues(), 2);
+    
+    // Check PHI node incoming values and blocks
+    bool hasValue100 = false;
+    bool hasValue200 = false;
+    bool hasTrueBlock = false;
+    bool hasFalseBlock = false;
+    
+    for (unsigned i = 0; i < phiNode->getNumIncomingValues(); ++i) {
+        auto value = phiNode->getIncomingValue(i);
+        auto block = phiNode->getIncomingBlock(i);
+        
+        if (auto constInt = dyn_cast<ConstantInt>(value)) {
+            if (constInt->getValue() == 100) hasValue100 = true;
+            if (constInt->getValue() == 200) hasValue200 = true;
+        }
+        
+        if (block->getName() == "if.true") hasTrueBlock = true;
+        if (block->getName() == "if.false") hasFalseBlock = true;
+    }
+    
+    EXPECT_TRUE(hasValue100);
+    EXPECT_TRUE(hasValue200);
+    EXPECT_TRUE(hasTrueBlock);
+    EXPECT_TRUE(hasFalseBlock);
+    
+    // Verify the return instruction uses the PHI node
+    ASSERT_NE(retInst, nullptr);
+    auto retValue = cast<ReturnInst>(retInst)->getReturnValue();
+    EXPECT_EQ(retValue, phiNode);
 }
 
 TEST_F(Mem2RegTest, IfElseWithMultipleAllocas) {
@@ -283,17 +362,46 @@ TEST_F(Mem2RegTest, IfElseWithMultipleAllocas) {
 
     bool hasAlloca = false;
     bool hasLoadStore = false;
-    int phiCount = 0;
+    std::vector<PHINode*> phiNodes;
+    Instruction* retInst = nullptr;
     for (auto& bb : *func) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if (isa<AllocaInst>(*it)) hasAlloca = true;
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) hasLoadStore = true;
-            if (isa<PHINode>(*it)) phiCount++;
+            if (auto phi = dyn_cast<PHINode>(*it)) {
+                phiNodes.push_back(phi);
+            }
+            if (isa<ReturnInst>(*it)) retInst = *it;
         }
     }
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
-    EXPECT_EQ(phiCount, 2);  // Should have PHI nodes for both variables
+    EXPECT_EQ(phiNodes.size(), 2);  // Should have PHI nodes for both variables
+    
+    // Verify both PHI nodes have correct incoming values
+    for (auto phi : phiNodes) {
+        EXPECT_EQ(phi->getNumIncomingValues(), 2);
+        
+        // Check if this is the x or y variable PHI by examining values
+        bool isXPhi = false;
+        bool isYPhi = false;
+        
+        for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
+            auto value = phi->getIncomingValue(i);
+            if (auto constInt = dyn_cast<ConstantInt>(value)) {
+                // x PHI should have values 10 and 100
+                if (constInt->getValue() == 10 || constInt->getValue() == 100) {
+                    isXPhi = true;
+                }
+                // y PHI should have values 20 and 200  
+                if (constInt->getValue() == 20 || constInt->getValue() == 200) {
+                    isYPhi = true;
+                }
+            }
+        }
+        
+        EXPECT_TRUE(isXPhi || isYPhi);
+    }
 }
 
 // Loop tests
@@ -343,17 +451,48 @@ TEST_F(Mem2RegTest, SimpleLoopWithAlloca) {
 
     bool hasAlloca = false;
     bool hasLoadStore = false;
-    int phiCount = 0;
+    std::vector<PHINode*> phiNodes;
+    BasicBlock* loopHeaderBlock = nullptr;
     for (auto& bb : *func) {
+        if (bb->getName() == "loop.header") {
+            loopHeaderBlock = bb;
+        }
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if (isa<AllocaInst>(*it)) hasAlloca = true;
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) hasLoadStore = true;
-            if (isa<PHINode>(*it)) phiCount++;
+            if (auto phi = dyn_cast<PHINode>(*it)) {
+                phiNodes.push_back(phi);
+            }
         }
     }
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
-    EXPECT_GT(phiCount, 0);  // Should have PHI nodes for loop variables
+    EXPECT_GE(phiNodes.size(), 2);  // Should have PHI nodes for both sum and i
+    
+    // Verify PHI nodes are in the loop header
+    ASSERT_NE(loopHeaderBlock, nullptr);
+    int phiInHeader = 0;
+    for (auto inst : *loopHeaderBlock) {
+        if (auto phi = dyn_cast<PHINode>(inst)) {
+            phiInHeader++;
+            EXPECT_EQ(phi->getNumIncomingValues(), 2);
+            
+            // Verify one incoming value is from entry (initial value)
+            // and one is from loop body (updated value)
+            bool hasEntryIncoming = false;
+            bool hasBodyIncoming = false;
+            
+            for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
+                auto block = phi->getIncomingBlock(i);
+                if (block->getName() == "entry") hasEntryIncoming = true;
+                if (block->getName() == "loop.body") hasBodyIncoming = true;
+            }
+            
+            EXPECT_TRUE(hasEntryIncoming);
+            EXPECT_TRUE(hasBodyIncoming);
+        }
+    }
+    EXPECT_EQ(phiInHeader, 2);  // Both sum and i should have PHI nodes in header
 }
 
 // Nested if-else tests
@@ -740,17 +879,42 @@ TEST_F(Mem2RegTest, AllocaWithStoreInOneBranchOnly) {
     // Should create PHI with undefined value for false branch
     bool hasAlloca = false;
     bool hasLoadStore = false;
-    bool hasPhi = false;
+    PHINode* phiNode = nullptr;
     for (auto& bb : *func) {
         for (auto it = bb->begin(); it != bb->end(); ++it) {
             if (isa<AllocaInst>(*it)) hasAlloca = true;
             if (isa<LoadInst>(*it) || isa<StoreInst>(*it)) hasLoadStore = true;
-            if (isa<PHINode>(*it)) hasPhi = true;
+            if (auto phi = dyn_cast<PHINode>(*it)) {
+                phiNode = phi;
+            }
         }
     }
     EXPECT_FALSE(hasAlloca);
     EXPECT_FALSE(hasLoadStore);
-    EXPECT_TRUE(hasPhi);
+    ASSERT_NE(phiNode, nullptr);
+    
+    // Verify PHI node has two incoming values
+    EXPECT_EQ(phiNode->getNumIncomingValues(), 2);
+    
+    // Check that one value is 100 (from true branch) and other is undefined (from false branch)
+    bool hasDefinedValue = false;
+    bool hasUndefValue = false;
+    
+    for (unsigned i = 0; i < phiNode->getNumIncomingValues(); ++i) {
+        auto value = phiNode->getIncomingValue(i);
+        auto block = phiNode->getIncomingBlock(i);
+        
+        if (auto constInt = dyn_cast<ConstantInt>(value)) {
+            if (constInt->getValue() == 100 && block->getName() == "if.true") {
+                hasDefinedValue = true;
+            }
+        } else if (isa<UndefValue>(value) && block->getName() == "if.false") {
+            hasUndefValue = true;
+        }
+    }
+    
+    EXPECT_TRUE(hasDefinedValue);
+    EXPECT_TRUE(hasUndefValue);
 }
 
 TEST_F(Mem2RegTest, AllocaWithDifferentTypes) {
