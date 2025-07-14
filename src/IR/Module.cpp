@@ -1,7 +1,5 @@
 #include "IR/Module.h"
 
-#include <sstream>
-
 namespace midend {
 
 GlobalVariable* GlobalVariable::Create(Type* ty, bool isConstant,

@@ -8,7 +8,6 @@
 #include "IR/Constant.h"
 #include "IR/Function.h"
 #include "IR/IRBuilder.h"
-#include "IR/Instructions.h"
 #include "IR/Module.h"
 #include "IR/Type.h"
 #include "IR/Value.h"
