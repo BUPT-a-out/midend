@@ -1,4 +1,5 @@
 add_rules("plugin.compile_commands.autoupdate", {outputdir = "."})
+add_rules("mode.debug", "mode.release", "mode.coverage")
 
 target("midend")
     set_kind("static")
@@ -27,6 +28,11 @@ target("midend")
         add_cxxflags("-O3", "-DNDEBUG")
         set_symbols("hidden")
         set_optimize("fastest")
+    elseif is_mode("coverage") then
+        add_cxxflags("-g", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping")
+        add_ldflags("-fprofile-instr-generate")
+        set_symbols("debug")
+        set_optimize("none")
     end
     
     before_build(function (target)
@@ -101,6 +107,54 @@ task("test")
             http.download("https://raw.githubusercontent.com/google/gtest-parallel/refs/heads/master/gtest_parallel.py", gtest_parallel)
         end
         os.exec(python3.program .. " " .. gtest_parallel .. " -r 10 " .. target_executable)
+    end)
+
+task("coverage")
+    set_menu {
+        usage = "xmake coverage",
+        description = "Generate HTML coverage report",
+        options = {}
+    }
+    on_run(function ()
+        import("core.project.project")
+        import("core.base.task")
+        
+        cprint("${blue}Building in coverage mode...")
+        os.exec("xmake config -m coverage")
+        
+        -- Clean up old coverage files to avoid inconsistencies
+        local build_dir = path.join(os.scriptdir(), "build")
+        if os.isdir(build_dir) then
+            cprint("${blue}Cleaning old coverage files...")
+            os.exec("find " .. build_dir .. " -name '*.gcda' -delete")
+        end
+        
+        task.run("build", {target = "midend_tests"})
+        
+        local target = project.target("midend_tests")
+        local target_executable = path.absolute(target:targetfile())
+        
+        cprint("${blue}Running tests to generate coverage data...")
+        os.exec(target_executable)
+        
+        cprint("${blue}Generating HTML coverage report...")
+        local coverage_dir = path.join(os.scriptdir(), "coverage")
+        local build_dir = path.join(os.scriptdir(), "build")
+        os.mkdir(coverage_dir)
+        
+        -- Use gcov to generate coverage report from .gcda files
+        local gcov_info = path.join(coverage_dir, "coverage.info")
+        local filtered_info = path.join(coverage_dir, "filtered_coverage.info")
+        
+        os.exec("lcov --capture --directory " .. build_dir .. " --base-directory " .. os.scriptdir() .. " --output-file " .. gcov_info .. " --ignore-errors path,source,unsupported,inconsistent,format,count")
+        
+        -- Filter out standard library and gtest files
+        os.exec("lcov --remove " .. gcov_info .. " '/usr/*' 'tests/*' '/Applications/*' '*/gtest/*' '*/googletest/*' '*/.xmake/*' --output-file " .. filtered_info .. " --ignore-errors path,source,unsupported,inconsistent,format,count,unused")
+        
+        os.exec("genhtml " .. filtered_info .. " --output-directory " .. coverage_dir .. " --ignore-errors source,inconsistent,unsupported,category,count")
+        
+        cprint("${green}Coverage report generated in: " .. coverage_dir)
+        cprint("${green}Open coverage/index.html in your browser to view the report")
     end)
 
 task("format")

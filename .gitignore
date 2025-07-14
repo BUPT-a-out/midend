@@ -3,3 +3,7 @@ build/
 Testing
 compile_commands.json
 .xmake
+coverage/
+.DS_Store
+*.profraw
+*.log

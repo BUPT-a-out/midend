@@ -110,8 +110,6 @@ class GetElementPtrInst : public Instruction {
         setName(name);
     }
 
-    void computeResultType();
-
    public:
     static GetElementPtrInst* Create(Type* pointeeType, Value* ptr,
                                      const std::vector<Value*>& indices,

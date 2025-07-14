@@ -1,5 +1,7 @@
 #include "IR/Module.h"
 
+#include <algorithm>
+
 namespace midend {
 
 GlobalVariable* GlobalVariable::Create(Type* ty, bool isConstant,
@@ -49,6 +51,9 @@ Module::iterator Module::erase(iterator pos) {
 }
 
 void Module::remove(Function* fn) {
+    if (fn->getParent() != this) {
+        return;  // Function is not in this module
+    }
     functions_.erase(fn->getIterator());
     fn->setParent(nullptr);
 }

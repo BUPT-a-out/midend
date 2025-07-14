@@ -223,4 +223,172 @@ TEST_F(FunctionTest, SetArgumentNames) {
     EXPECT_EQ(func->getArgByName("arg1"), nullptr);
 }
 
+TEST_F(FunctionTest, BasicBlockPushFront) {
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+    auto* func = Function::Create(fnTy, "test_function", module.get());
+
+    // Create basic blocks manually (not using constructor that auto-adds to
+    // function)
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1");
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2");
+    auto* bb3 = BasicBlock::Create(context.get(), "bb3");
+
+    // Add using push_back first
+    func->push_back(bb1);
+    func->push_back(bb2);
+
+    // Check initial order: bb1, bb2
+    auto it = func->begin();
+    EXPECT_EQ(*it, bb1);
+    ++it;
+    EXPECT_EQ(*it, bb2);
+
+    // Add using push_front
+    func->push_front(bb3);
+
+    // Check new order: bb3, bb1, bb2
+    it = func->begin();
+    EXPECT_EQ(*it, bb3);
+    ++it;
+    EXPECT_EQ(*it, bb1);
+    ++it;
+    EXPECT_EQ(*it, bb2);
+
+    EXPECT_EQ(func->size(), 3u);
+    EXPECT_EQ(bb3->getParent(), func);
+    EXPECT_FALSE(func->isDeclaration());
+}
+
+TEST_F(FunctionTest, BasicBlockErase) {
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+    auto* func = Function::Create(fnTy, "test_function", module.get());
+
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", func);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", func);
+    auto* bb3 = BasicBlock::Create(context.get(), "bb3", func);
+
+    EXPECT_EQ(func->size(), 3u);
+
+    // Get iterator to bb2
+    auto it = func->begin();
+    ++it;  // Point to bb2
+    EXPECT_EQ(*it, bb2);
+
+    // Erase bb2
+    auto next_it = func->erase(it);
+
+    EXPECT_EQ(func->size(), 2u);
+    EXPECT_EQ(*next_it, bb3);
+
+    // Check order: bb1, bb3
+    it = func->begin();
+    EXPECT_EQ(*it, bb1);
+    ++it;
+    EXPECT_EQ(*it, bb3);
+
+    // bb2 should be deleted automatically by erase
+}
+
+TEST_F(FunctionTest, FunctionInsertBefore) {
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+
+    // Create first function in module
+    auto* func1 = Function::Create(fnTy, "func1", module.get());
+
+    // Create standalone function
+    auto* func2 = Function::Create(fnTy, "func2");
+    EXPECT_EQ(func2->getParent(), nullptr);
+
+    // Insert func2 before func1
+    func2->insertBefore(func1);
+    EXPECT_EQ(func2->getParent(), module.get());
+
+    // Check order in module: func2, func1
+    auto it = module->begin();
+    EXPECT_EQ(*it, func2);
+    ++it;
+    EXPECT_EQ(*it, func1);
+}
+
+TEST_F(FunctionTest, FunctionInsertAfter) {
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+
+    // Create first function in module
+    auto* func1 = Function::Create(fnTy, "func1", module.get());
+
+    // Create standalone function
+    auto* func2 = Function::Create(fnTy, "func2");
+    EXPECT_EQ(func2->getParent(), nullptr);
+
+    // Insert func2 after func1
+    func2->insertAfter(func1);
+    EXPECT_EQ(func2->getParent(), module.get());
+
+    // Check order in module: func1, func2
+    auto it = module->begin();
+    EXPECT_EQ(*it, func1);
+    ++it;
+    EXPECT_EQ(*it, func2);
+}
+
+TEST_F(FunctionTest, FunctionMoveBefore) {
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+
+    auto* func1 = Function::Create(fnTy, "func1", module.get());
+    auto* func2 = Function::Create(fnTy, "func2", module.get());
+    auto* func3 = Function::Create(fnTy, "func3", module.get());
+
+    // Initial order: func1, func2, func3
+    auto it = module->begin();
+    EXPECT_EQ(*it, func1);
+    ++it;
+    EXPECT_EQ(*it, func2);
+    ++it;
+    EXPECT_EQ(*it, func3);
+
+    // Move func3 before func1
+    func3->moveBefore(func1);
+
+    // New order: func3, func1, func2
+    it = module->begin();
+    EXPECT_EQ(*it, func3);
+    ++it;
+    EXPECT_EQ(*it, func1);
+    ++it;
+    EXPECT_EQ(*it, func2);
+}
+
+TEST_F(FunctionTest, FunctionMoveAfter) {
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+
+    auto* func1 = Function::Create(fnTy, "func1", module.get());
+    auto* func2 = Function::Create(fnTy, "func2", module.get());
+    auto* func3 = Function::Create(fnTy, "func3", module.get());
+
+    // Initial order: func1, func2, func3
+    auto it = module->begin();
+    EXPECT_EQ(*it, func1);
+    ++it;
+    EXPECT_EQ(*it, func2);
+    ++it;
+    EXPECT_EQ(*it, func3);
+
+    // Move func1 after func3
+    func1->moveAfter(func3);
+
+    // New order: func2, func3, func1
+    it = module->begin();
+    EXPECT_EQ(*it, func2);
+    ++it;
+    EXPECT_EQ(*it, func3);
+    ++it;
+    EXPECT_EQ(*it, func1);
+}
+
 }  // namespace

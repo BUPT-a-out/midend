@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <functional>
+#include <iostream>
+#include <sstream>
 
 #include "IR/BasicBlock.h"
 #include "IR/Function.h"
@@ -1286,6 +1288,133 @@ TEST_F(DominanceTest, RPOSimpleOrderingTest) {
 
     EXPECT_TRUE(bb1_before_bb2 && bb1_after_entry);
     EXPECT_TRUE(bb3_before_bb2 && bb3_after_entry);
+}
+
+TEST_F(DominanceTest, GetDominatorsFunction) {
+    // Test for getDominators() function coverage (line 166)
+    auto* func = createDiamondFunction();
+    DominanceInfo domInfo(func);
+
+    auto blocks = func->getBasicBlocks();
+    auto* entry = &func->front();
+    BasicBlock* left = nullptr;
+    BasicBlock* right = nullptr;
+    BasicBlock* merge = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto* bb : blocks) {
+        if (bb->getName() == "left")
+            left = bb;
+        else if (bb->getName() == "right")
+            right = bb;
+        else if (bb->getName() == "merge")
+            merge = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    // Test getDominators() for each block
+    const auto& entryDoms = domInfo.getDominators(entry);
+    EXPECT_EQ(entryDoms.size(), 1u);
+    EXPECT_TRUE(entryDoms.count(entry) > 0);
+
+    const auto& leftDoms = domInfo.getDominators(left);
+    EXPECT_EQ(leftDoms.size(), 2u);
+    EXPECT_TRUE(leftDoms.count(entry) > 0);
+    EXPECT_TRUE(leftDoms.count(left) > 0);
+
+    const auto& rightDoms = domInfo.getDominators(right);
+    EXPECT_EQ(rightDoms.size(), 2u);
+    EXPECT_TRUE(rightDoms.count(entry) > 0);
+    EXPECT_TRUE(rightDoms.count(right) > 0);
+
+    const auto& mergeDoms = domInfo.getDominators(merge);
+    EXPECT_EQ(mergeDoms.size(), 2u);
+    EXPECT_TRUE(mergeDoms.count(entry) > 0);
+    EXPECT_TRUE(mergeDoms.count(merge) > 0);
+
+    const auto& exitDoms = domInfo.getDominators(exit);
+    EXPECT_EQ(exitDoms.size(), 3u);
+    EXPECT_TRUE(exitDoms.count(entry) > 0);
+    EXPECT_TRUE(exitDoms.count(merge) > 0);
+    EXPECT_TRUE(exitDoms.count(exit) > 0);
+
+    // Test with null or non-existent block
+    BasicBlock* nonExistent =
+        BasicBlock::Create(context.get(), "nonexistent", func);
+    const auto& nonExistentDoms = domInfo.getDominators(nonExistent);
+    EXPECT_TRUE(nonExistentDoms.empty());
+}
+
+TEST_F(DominanceTest, GetDominatedCacheHit) {
+    // Test for getDominated() cache hit path (line 182)
+    auto* func = createDiamondFunction();
+    DominanceInfo domInfo(func);
+
+    auto* entry = &func->front();
+
+    // First call to getDominated() should compute and cache the result
+    const auto& entryDominated1 = domInfo.getDominated(entry);
+    EXPECT_EQ(entryDominated1.size(), 5u);
+
+    // Second call should hit the cache (line 182)
+    const auto& entryDominated2 = domInfo.getDominated(entry);
+    EXPECT_EQ(entryDominated2.size(), 5u);
+
+    // Verify they return the same reference (cache hit)
+    EXPECT_EQ(&entryDominated1, &entryDominated2);
+
+    // Test cache hit for multiple blocks
+    auto blocks = func->getBasicBlocks();
+    BasicBlock* merge = nullptr;
+    for (auto* bb : blocks) {
+        if (bb->getName() == "merge") {
+            merge = bb;
+            break;
+        }
+    }
+
+    const auto& mergeDominated1 = domInfo.getDominated(merge);
+    const auto& mergeDominated2 = domInfo.getDominated(merge);
+    EXPECT_EQ(&mergeDominated1, &mergeDominated2);
+    EXPECT_EQ(mergeDominated1.size(), 2u);
+}
+
+TEST_F(DominanceTest, PrintFunctions) {
+    // Test for print() functions coverage
+    auto* func = createDiamondFunction();
+    DominanceInfo domInfo(func);
+
+    // Capture output to test print functions
+    std::stringstream buffer;
+    std::streambuf* old = std::cout.rdbuf(buffer.rdbuf());
+
+    // Test DominanceInfo::print()
+    domInfo.print();
+
+    std::string output = buffer.str();
+    EXPECT_FALSE(output.empty());
+    EXPECT_TRUE(output.find("Dominance Information") != std::string::npos);
+    EXPECT_TRUE(output.find("Dominators:") != std::string::npos);
+    EXPECT_TRUE(output.find("Immediate Dominator:") != std::string::npos);
+    EXPECT_TRUE(output.find("Dominance Frontier:") != std::string::npos);
+    EXPECT_TRUE(output.find("Dominator Tree:") != std::string::npos);
+
+    // Clear buffer and test DominatorTree::print()
+    buffer.str("");
+    buffer.clear();
+
+    const auto* domTree = domInfo.getDominatorTree();
+    ASSERT_NE(domTree, nullptr);
+    domTree->print();
+
+    std::string treeOutput = buffer.str();
+    EXPECT_FALSE(treeOutput.empty());
+    EXPECT_TRUE(treeOutput.find("entry") != std::string::npos);
+    EXPECT_TRUE(treeOutput.find("level") != std::string::npos);
+
+    // Restore cout
+    std::cout.rdbuf(old);
 }
 
 }  // namespace

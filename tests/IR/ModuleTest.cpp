@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <iterator>
+#include <vector>
+
 #include "IR/Function.h"
 #include "IR/Module.h"
 #include "IR/Type.h"
@@ -153,6 +156,64 @@ TEST_F(ModuleTest, ModulePrinting) {
     std::string expected =
         "; ModuleID = 'test_module'\ndeclare test_function\n";
     EXPECT_EQ(moduleStr, expected);
+}
+
+TEST_F(ModuleTest, FunctionInsertionAndRemoval) {
+    Module module("test_module", context.get());
+
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+
+    // Create functions with the module as parent
+    auto* func1 = Function::Create(fnTy, "function1", &module);
+    auto* func2 = Function::Create(fnTy, "function2", &module);
+
+    // Functions should be automatically added to module via constructor
+    EXPECT_EQ(module.size(), 2u);
+    EXPECT_EQ(func1->getParent(), &module);
+    EXPECT_EQ(func2->getParent(), &module);
+
+    // Test that functions are in the module
+    EXPECT_EQ(module.front(), func1);
+    EXPECT_EQ(module.back(), func2);
+
+    // Test basic push_front operation with a new function
+    auto* func3 = Function::Create(fnTy, "function3");
+    module.push_front(func3);
+    EXPECT_EQ(module.size(), 3u);
+    EXPECT_EQ(module.front(), func3);
+    EXPECT_EQ(func3->getParent(), &module);
+
+    // All functions will be deleted by module destructor
+}
+
+TEST_F(ModuleTest, GlobalVariableManagement) {
+    Module module("test_module", context.get());
+
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+
+    auto* global1 =
+        GlobalVariable::Create(int32Ty, false, GlobalVariable::ExternalLinkage,
+                               nullptr, "global1", &module);
+    auto* global2 =
+        GlobalVariable::Create(floatTy, true, GlobalVariable::InternalLinkage,
+                               nullptr, "global2", &module);
+
+    // Test getGlobalVariable
+    EXPECT_EQ(module.getGlobalVariable("global1"), global1);
+    EXPECT_EQ(module.getGlobalVariable("global2"), global2);
+    EXPECT_EQ(module.getGlobalVariable("nonexistent"), nullptr);
+
+    // Test removeGlobalVariable
+    module.removeGlobalVariable(global1);
+    EXPECT_EQ(module.getGlobalVariable("global1"), nullptr);
+    EXPECT_EQ(global1->getParent(), nullptr);
+
+    // global2 should still be there
+    EXPECT_EQ(module.getGlobalVariable("global2"), global2);
+
+    delete global1;
 }
 
 }  // namespace

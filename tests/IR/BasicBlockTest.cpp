@@ -236,4 +236,129 @@ TEST_F(BasicBlockTest, PredecessorCacheInvalidation) {
     EXPECT_EQ(preds3_after[0], bb1);
 }
 
+TEST_F(BasicBlockTest, PushBackAndPushFront) {
+    auto* bb = BasicBlock::Create(context.get(), "entry", function);
+
+    // Create instructions manually (not using IRBuilder)
+    auto* int32Ty = context->getInt32Type();
+    auto* alloca1 = AllocaInst::Create(int32Ty, nullptr, "var1");
+    auto* alloca2 = AllocaInst::Create(int32Ty, nullptr, "var2");
+    auto* alloca3 = AllocaInst::Create(int32Ty, nullptr, "var3");
+
+    // Test push_back
+    bb->push_back(alloca1);
+    EXPECT_EQ(bb->size(), 1u);
+    EXPECT_EQ(alloca1->getParent(), bb);
+    EXPECT_EQ(*bb->begin(), alloca1);
+
+    bb->push_back(alloca2);
+    EXPECT_EQ(bb->size(), 2u);
+    auto it = bb->begin();
+    EXPECT_EQ(*it, alloca1);
+    ++it;
+    EXPECT_EQ(*it, alloca2);
+
+    // Test push_front
+    bb->push_front(alloca3);
+    EXPECT_EQ(bb->size(), 3u);
+    EXPECT_EQ(alloca3->getParent(), bb);
+
+    // Check order: alloca3, alloca1, alloca2
+    it = bb->begin();
+    EXPECT_EQ(*it, alloca3);
+    ++it;
+    EXPECT_EQ(*it, alloca1);
+    ++it;
+    EXPECT_EQ(*it, alloca2);
+}
+
+TEST_F(BasicBlockTest, RemoveTerminatorInstruction) {
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", function);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", function);
+
+    IRBuilder builder(bb1);
+
+    // Add a terminator instruction
+    auto* br = builder.createBr(bb2);
+    EXPECT_TRUE(br->isTerminator());
+    EXPECT_EQ(bb1->getTerminator(), br);
+
+    // Remove the terminator
+    bb1->remove(br);
+    EXPECT_EQ(bb1->getTerminator(), nullptr);
+    EXPECT_EQ(br->getParent(), nullptr);
+
+    delete br;
+}
+
+TEST_F(BasicBlockTest, InsertAfterFunction) {
+    // Create a standalone basic block (not attached to function)
+    auto* standaloneBB = BasicBlock::Create(context.get(), "standalone");
+    EXPECT_EQ(standaloneBB->getParent(), nullptr);
+
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", function);
+
+    // Test insertAfter
+    standaloneBB->insertAfter(bb1);
+    EXPECT_EQ(standaloneBB->getParent(), function);
+
+    // Check order in function
+    auto it = function->begin();
+    EXPECT_EQ(*it, bb1);
+    ++it;
+    EXPECT_EQ(*it, standaloneBB);
+}
+
+TEST_F(BasicBlockTest, MoveAfterFunction) {
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", function);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", function);
+    auto* bb3 = BasicBlock::Create(context.get(), "bb3", function);
+
+    // Initial order: bb1, bb2, bb3
+    auto it = function->begin();
+    EXPECT_EQ(*it, bb1);
+    ++it;
+    EXPECT_EQ(*it, bb2);
+    ++it;
+    EXPECT_EQ(*it, bb3);
+
+    // Move bb1 after bb3
+    bb1->moveAfter(bb3);
+
+    // New order: bb2, bb3, bb1
+    it = function->begin();
+    EXPECT_EQ(*it, bb2);
+    ++it;
+    EXPECT_EQ(*it, bb3);
+    ++it;
+    EXPECT_EQ(*it, bb1);
+}
+
+TEST_F(BasicBlockTest, EraseFromParent) {
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", function);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", function);
+
+    EXPECT_EQ(function->size(), 2u);
+
+    // Erase bb1 from parent
+    bb1->eraseFromParent();
+
+    EXPECT_EQ(function->size(), 1u);
+    EXPECT_EQ(*function->begin(), bb2);
+
+    // bb1 should be deleted automatically by eraseFromParent
+}
+
+TEST_F(BasicBlockTest, GetPredecessorsWithoutParent) {
+    // Create a standalone basic block (not attached to function)
+    auto* standaloneBB = BasicBlock::Create(context.get(), "standalone");
+    EXPECT_EQ(standaloneBB->getParent(), nullptr);
+
+    // getPredecessors should return empty vector when no parent
+    auto preds = standaloneBB->getPredecessors();
+    EXPECT_EQ(preds.size(), 0u);
+
+    delete standaloneBB;
+}
+
 }  // namespace

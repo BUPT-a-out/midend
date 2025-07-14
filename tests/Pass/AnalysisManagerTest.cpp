@@ -495,4 +495,160 @@ TEST_F(AnalysisManagerTest, MultipleAnalysisTypes) {
     EXPECT_EQ(modAnalysis->getValue(), 42);
 }
 
+// Test for getRegisteredAnalyses function coverage (lines 244-254)
+TEST_F(AnalysisManagerTest, GetRegisteredAnalyses) {
+    // Create a second function
+    auto* voidTy = context->getVoidType();
+    auto* fnTy = FunctionType::get(voidTy, {});
+    auto* function2 = Function::Create(fnTy, "test_function2", module.get());
+
+    // Test empty registered analyses for function
+    auto registeredFunc = analysisManager->getRegisteredAnalyses(*function);
+    EXPECT_TRUE(registeredFunc.empty());
+
+    // Test empty registered analyses for module
+    auto registeredMod = analysisManager->getRegisteredAnalyses(*module);
+    EXPECT_TRUE(registeredMod.empty());
+
+    // Register analyses for function
+    analysisManager->registerAnalysis(
+        "func_analysis1", *function,
+        std::make_unique<TestFunctionAnalysis>("test1"));
+    analysisManager->registerAnalysis(
+        "func_analysis2", *function,
+        std::make_unique<TestFunctionAnalysis>("test2"));
+
+    // Register analysis for different function
+    analysisManager->registerAnalysis(
+        "func_analysis3", *function2,
+        std::make_unique<TestFunctionAnalysis>("test3"));
+
+    // Register analyses for module
+    analysisManager->registerAnalysis("mod_analysis1", *module,
+                                      std::make_unique<TestModuleAnalysis>(1));
+    analysisManager->registerAnalysis("mod_analysis2", *module,
+                                      std::make_unique<TestModuleAnalysis>(2));
+
+    // Test registered analyses for first function
+    auto registeredFunc1 = analysisManager->getRegisteredAnalyses(*function);
+    EXPECT_EQ(registeredFunc1.size(), 2u);
+    EXPECT_TRUE(std::find(registeredFunc1.begin(), registeredFunc1.end(),
+                          "func_analysis1") != registeredFunc1.end());
+    EXPECT_TRUE(std::find(registeredFunc1.begin(), registeredFunc1.end(),
+                          "func_analysis2") != registeredFunc1.end());
+
+    // Test registered analyses for second function
+    auto registeredFunc2 = analysisManager->getRegisteredAnalyses(*function2);
+    EXPECT_EQ(registeredFunc2.size(), 1u);
+    EXPECT_TRUE(std::find(registeredFunc2.begin(), registeredFunc2.end(),
+                          "func_analysis3") != registeredFunc2.end());
+
+    // Test registered analyses for module
+    auto registeredModule = analysisManager->getRegisteredAnalyses(*module);
+    EXPECT_EQ(registeredModule.size(), 2u);
+    EXPECT_TRUE(std::find(registeredModule.begin(), registeredModule.end(),
+                          "mod_analysis1") != registeredModule.end());
+    EXPECT_TRUE(std::find(registeredModule.begin(), registeredModule.end(),
+                          "mod_analysis2") != registeredModule.end());
+}
+
+// Test Analysis classes with module dependencies
+class TestModuleDependentAnalysis
+    : public AnalysisBase<TestModuleDependentAnalysis> {
+   public:
+    TestModuleDependentAnalysis()
+        : AnalysisBase("TestModuleDependentAnalysis") {}
+
+    std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
+        (void)m;
+        return std::make_unique<TestModuleAnalysis>(100);
+    }
+
+    bool supportsModule() const override { return true; }
+
+    std::vector<std::string> getDependencies() const override {
+        return {"TestModuleAnalysis"};
+    }
+};
+
+class TestFailingAnalysis : public AnalysisBase<TestFailingAnalysis> {
+   public:
+    TestFailingAnalysis() : AnalysisBase("TestFailingAnalysis") {}
+
+    std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
+        (void)m;
+        return nullptr;  // Simulate failure
+    }
+
+    bool supportsModule() const override { return true; }
+};
+
+// Test for Analysis dependencies in module computeAnalysis (lines 227-232)
+TEST_F(AnalysisManagerTest, ModuleAnalysisDependencies) {
+    // Register both analyses
+    analysisManager->registerAnalysisType<TestModuleAnalysisImpl>();
+    analysisManager->registerAnalysisType<TestModuleDependentAnalysis>();
+
+    // Request dependent analysis - should automatically compute dependency
+    auto* dependentAnalysis = analysisManager->getAnalysis<TestModuleAnalysis>(
+        "TestModuleDependentAnalysis", *module);
+
+    EXPECT_NE(dependentAnalysis, nullptr);
+    EXPECT_EQ(dependentAnalysis->getValue(), 100);
+
+    // Verify that the dependency was also computed
+    auto* baseAnalysis = analysisManager->getAnalysis<TestModuleAnalysis>(
+        "TestModuleAnalysis", *module);
+    EXPECT_NE(baseAnalysis, nullptr);
+    EXPECT_EQ(baseAnalysis->getValue(), 42);
+}
+
+TEST_F(AnalysisManagerTest, ModuleAnalysisDependencyFailure) {
+    // Register dependent analysis but not its dependency
+    analysisManager->registerAnalysisType<TestModuleDependentAnalysis>();
+
+    // Request dependent analysis - should fail due to missing dependency
+    auto* analysis = analysisManager->getAnalysis<TestModuleAnalysis>(
+        "TestModuleDependentAnalysis", *module);
+
+    EXPECT_EQ(analysis, nullptr);
+}
+
+TEST_F(AnalysisManagerTest, ModuleAnalysisComputationFailure) {
+    // Register analysis that fails to compute
+    analysisManager->registerAnalysisType<TestFailingAnalysis>();
+
+    // Request analysis - should fail due to null result
+    auto* analysis = analysisManager->getAnalysis<TestModuleAnalysis>(
+        "TestFailingAnalysis", *module);
+
+    EXPECT_EQ(analysis, nullptr);
+}
+
+// Test for function analysis returning null result
+class TestFailingFunctionAnalysis
+    : public AnalysisBase<TestFailingFunctionAnalysis> {
+   public:
+    TestFailingFunctionAnalysis()
+        : AnalysisBase("TestFailingFunctionAnalysis") {}
+
+    std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
+        (void)f;
+        return nullptr;  // Simulate failure
+    }
+
+    bool supportsFunction() const override { return true; }
+};
+
+TEST_F(AnalysisManagerTest, FunctionAnalysisComputationFailure) {
+    // Register analysis that fails to compute
+    analysisManager->registerAnalysisType<TestFailingFunctionAnalysis>();
+
+    // Request analysis - should fail due to null result
+    auto* analysis = analysisManager->getAnalysis<TestFunctionAnalysis>(
+        "TestFailingFunctionAnalysis", *function);
+
+    EXPECT_EQ(analysis, nullptr);
+}
+
 }  // namespace

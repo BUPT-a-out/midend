@@ -74,6 +74,27 @@ TEST_F(ConstantTest, ConstantIntCaching) {
     EXPECT_NE(const1, const4);
 }
 
+TEST_F(ConstantTest, ConstantIntDirectTypeGet) {
+    auto* int32Ty = context->getInt32Type();
+    auto* int64Ty = context->getIntegerType(64);
+
+    // Test the direct ConstantInt::get(IntegerType*, uint64_t) overload
+    auto* const42_32 = ConstantInt::get(int32Ty, 42);
+    auto* const42_64 = ConstantInt::get(int64Ty, 42);
+
+    EXPECT_EQ(const42_32->getValue(), 42u);
+    EXPECT_EQ(const42_32->getType(), int32Ty);
+    EXPECT_EQ(const42_64->getValue(), 42u);
+    EXPECT_EQ(const42_64->getType(), int64Ty);
+
+    // Should be different objects since different types
+    EXPECT_NE(const42_32, const42_64);
+
+    // Test caching works with this overload too
+    auto* const42_32_again = ConstantInt::get(int32Ty, 42);
+    EXPECT_EQ(const42_32, const42_32_again);
+}
+
 TEST_F(ConstantTest, ConstantFPCreation) {
     auto* floatTy = context->getFloatType();
 
@@ -168,6 +189,119 @@ TEST_F(ConstantTest, ConstantExpr) {
 
     auto* mulExpr = ConstantExpr::getMul(val1, val2);
     EXPECT_EQ(mulExpr->getOpcode(), Opcode::Mul);
+}
+
+TEST_F(ConstantTest, ConstantStringRepresentations) {
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+    auto* ptrTy = PointerType::get(int32Ty);
+    auto* arrayTy = ArrayType::get(int32Ty, 3);
+
+    // Test ConstantInt toString
+    auto* constInt = ConstantInt::get(int32Ty, 42);
+    EXPECT_EQ(constInt->toString(), "42");
+
+    auto* constNegInt = ConstantInt::get(int32Ty, static_cast<uint64_t>(-1));
+    EXPECT_EQ(constNegInt->toString(),
+              std::to_string(static_cast<uint64_t>(-1)));
+
+    // Test ConstantFP toString
+    auto* constFloat = ConstantFP::get(floatTy, 3.14159f);
+    EXPECT_EQ(constFloat->toString(), std::to_string(3.14159f));
+
+    auto* constNegFloat = ConstantFP::get(floatTy, -2.5f);
+    EXPECT_EQ(constNegFloat->toString(), std::to_string(-2.5f));
+
+    // Test ConstantPointerNull toString
+    auto* nullPtr = ConstantPointerNull::get(ptrTy);
+    EXPECT_EQ(nullPtr->toString(), "null");
+
+    // Test ConstantArray toString
+    std::vector<Constant*> elements = {ConstantInt::get(int32Ty, 1),
+                                       ConstantInt::get(int32Ty, 2),
+                                       ConstantInt::get(int32Ty, 3)};
+    auto* constArray = ConstantArray::get(arrayTy, elements);
+    EXPECT_EQ(constArray->toString(), "[1, 2, 3]");
+
+    // Test empty array
+    auto* emptyArrayTy = ArrayType::get(int32Ty, 0);
+    auto* emptyArray = ConstantArray::get(emptyArrayTy, {});
+    EXPECT_EQ(emptyArray->toString(), "[]");
+
+    // Test ConstantExpr toString
+    auto* val1 = ConstantInt::get(int32Ty, 10);
+    auto* val2 = ConstantInt::get(int32Ty, 20);
+    auto* addExpr = ConstantExpr::getAdd(val1, val2);
+    EXPECT_EQ(addExpr->toString(), "const_expr");
+
+    // Test UndefValue toString
+    auto* undefInt = UndefValue::get(int32Ty);
+    EXPECT_EQ(undefInt->toString(), "undef");
+}
+
+TEST_F(ConstantTest, ConstantFPDirectTypeGet) {
+    auto* floatTy = context->getFloatType();
+
+    // Test the direct ConstantFP::get(FloatType*, float) overload
+    auto* constPi = ConstantFP::get(floatTy, 3.14159f);
+    auto* constE = ConstantFP::get(floatTy, 2.71828f);
+
+    EXPECT_FLOAT_EQ(constPi->getValue(), 3.14159f);
+    EXPECT_EQ(constPi->getType(), floatTy);
+    EXPECT_FLOAT_EQ(constE->getValue(), 2.71828f);
+    EXPECT_EQ(constE->getType(), floatTy);
+
+    // Should be different objects since different values
+    EXPECT_NE(constPi, constE);
+
+    // Test caching works with this overload too
+    auto* constPiAgain = ConstantFP::get(floatTy, 3.14159f);
+    EXPECT_EQ(constPi, constPiAgain);
+
+    // Test the Context-based overload
+    auto* constFromCtx = ConstantFP::get(context.get(), 3.14159f);
+    EXPECT_EQ(constPi, constFromCtx);  // Should be the same cached object
+}
+
+TEST_F(ConstantTest, ConstantArrayElementAccess) {
+    auto* int32Ty = context->getInt32Type();
+    auto* arrayTy = ArrayType::get(int32Ty, 3);
+
+    std::vector<Constant*> elements = {ConstantInt::get(int32Ty, 10),
+                                       ConstantInt::get(int32Ty, 20),
+                                       ConstantInt::get(int32Ty, 30)};
+
+    auto* constArray = ConstantArray::get(arrayTy, elements);
+
+    // Test getNumElements
+    EXPECT_EQ(constArray->getNumElements(), 3u);
+
+    // Test getElement with valid indices
+    EXPECT_EQ(constArray->getElement(0), elements[0]);
+    EXPECT_EQ(constArray->getElement(1), elements[1]);
+    EXPECT_EQ(constArray->getElement(2), elements[2]);
+
+    // Test getElement with invalid index (should return nullptr)
+    EXPECT_EQ(constArray->getElement(3), nullptr);
+    EXPECT_EQ(constArray->getElement(100), nullptr);
+
+    // Test getType returns correct ArrayType
+    EXPECT_EQ(constArray->getType(), arrayTy);
+}
+
+TEST_F(ConstantTest, ConstantExprOperandAccess) {
+    auto* int32Ty = context->getInt32Type();
+    auto* val1 = ConstantInt::get(int32Ty, 15);
+    auto* val2 = ConstantInt::get(int32Ty, 25);
+
+    auto* addExpr = ConstantExpr::getAdd(val1, val2);
+
+    // Test getNumOperands
+    EXPECT_EQ(addExpr->getNumOperands(), 2u);
+
+    // Test operand access
+    EXPECT_EQ(addExpr->getOperand(0), val1);
+    EXPECT_EQ(addExpr->getOperand(1), val2);
 }
 
 }  // namespace

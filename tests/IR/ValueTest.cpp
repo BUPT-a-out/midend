@@ -543,4 +543,121 @@ TEST_F(ValueTest, EdgeCasesAndErrorConditions) {
     delete secondUser;
 }
 
+TEST_F(ValueTest, ConstUseIterators) {
+    auto* int32Ty = context->getInt32Type();
+    auto* val = ConstantInt::get(int32Ty, 87654);
+
+    class TestUser : public User {
+       public:
+        TestUser(Type* ty, int id)
+            : User(ty, ValueKind::User, 1, "test_user"), id_(id) {}
+        int getId() const { return id_; }
+
+       private:
+        int id_;
+    };
+
+    std::vector<TestUser*> users;
+    for (int i = 0; i < 3; ++i) {
+        auto* user = new TestUser(int32Ty, i);
+        user->setOperand(0, val);
+        users.push_back(user);
+    }
+
+    // Test const use iterators
+    const Value* constVal = val;
+    auto constBegin = constVal->use_begin();
+    auto constEnd = constVal->use_end();
+
+    EXPECT_NE(constBegin, constEnd);
+
+    // Count users through const iterator
+    int count = 0;
+    for (auto it = constBegin; it != constEnd; ++it) {
+        ++count;
+        EXPECT_NE((*it)->getUser(), nullptr);
+    }
+    EXPECT_EQ(count, 3);
+
+    // Clean up
+    for (auto* user : users) {
+        delete user;
+    }
+}
+
+TEST_F(ValueTest, UseRanges) {
+    auto* int32Ty = context->getInt32Type();
+    auto* val = ConstantInt::get(int32Ty, 98765);
+
+    class TestUser : public User {
+       public:
+        TestUser(Type* ty, int id)
+            : User(ty, ValueKind::User, 1, "test_user"), id_(id) {}
+        int getId() const { return id_; }
+
+       private:
+        int id_;
+    };
+
+    std::vector<TestUser*> users;
+    for (int i = 0; i < 4; ++i) {
+        auto* user = new TestUser(int32Ty, i);
+        user->setOperand(0, val);
+        users.push_back(user);
+    }
+
+    // Test UseRange
+    auto userRange = val->users();
+    int count = 0;
+    for (auto it = userRange.begin(); it != userRange.end(); ++it) {
+        ++count;
+        EXPECT_NE((*it)->getUser(), nullptr);
+    }
+    EXPECT_EQ(count, 4);
+
+    // Test ConstUseRange
+    const Value* constVal = val;
+    auto constUserRange = constVal->users();
+    count = 0;
+    for (auto it = constUserRange.begin(); it != constUserRange.end(); ++it) {
+        ++count;
+        EXPECT_NE((*it)->getUser(), nullptr);
+    }
+    EXPECT_EQ(count, 4);
+
+    // Clean up
+    for (auto* user : users) {
+        delete user;
+    }
+}
+
+TEST_F(ValueTest, ValueToString) {
+    // Create a module and function to test instruction toString
+    auto module = std::make_unique<Module>("test", context.get());
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty, int32Ty});
+    auto* func = Function::Create(fnTy, "test_func", module.get());
+    auto* bb = BasicBlock::Create(context.get(), "entry", func);
+
+    IRBuilder builder(bb);
+    auto* arg0 = func->getArg(0);
+    auto* arg1 = func->getArg(1);
+
+    // Test named instruction - instructions use the base Value::toString()
+    auto* namedInst = builder.createAdd(arg0, arg1, "test_add");
+    EXPECT_EQ(namedInst->toString(), "%test_add");
+
+    // Test unnamed instruction
+    auto* unnamedInst = builder.createAdd(arg0, arg1);
+    EXPECT_EQ(unnamedInst->toString(), "%unnamed");
+
+    // Test instruction with empty name
+    auto* emptyNameInst = builder.createAdd(arg0, arg1, "");
+    EXPECT_EQ(emptyNameInst->toString(), "%unnamed");
+
+    // Constants override toString() to show their values
+    auto* constant = ConstantInt::get(int32Ty, 42);
+    EXPECT_EQ(constant->toString(), "42");
+}
+
 }  // namespace

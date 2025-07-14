@@ -42,11 +42,6 @@ GetElementPtrInst* GetElementPtrInst::Create(Type* pointeeType, Value* ptr,
     return inst;
 }
 
-void GetElementPtrInst::computeResultType() {
-    // This method is no longer needed since we set the type in the constructor
-    // Keeping empty implementation for now
-}
-
 Instruction* GetElementPtrInst::clone() const {
     std::vector<Value*> indices;
     for (unsigned i = 0; i < getNumIndices(); ++i) {

@@ -537,4 +537,87 @@ TEST_F(PassManagerTest, UnknownAnalysisRequirementFails) {
     EXPECT_FALSE(UnknownAnalysisRequiringPass::executed);
 }
 
+// Test for FunctionPassManager with null function (run without explicit
+// function)
+TEST_F(PassManagerTest, FunctionPassManagerWithNullFunction) {
+    FunctionPassManager fpm(nullptr);
+    fpm.addPass<CounterFunctionPass>();
+
+    CounterFunctionPass::executionCount = 0;
+    CounterFunctionPass::processedFunctions.clear();
+
+    // Run without explicit function - should return false
+    bool result = fpm.run();
+    EXPECT_FALSE(result);
+    EXPECT_EQ(CounterFunctionPass::executionCount, 0);
+}
+
+// Test for Module pass in FunctionPassManager (edge case for lines 87-91)
+class TestModulePassInFunctionManager : public ModulePass {
+   public:
+    TestModulePassInFunctionManager()
+        : ModulePass("TestModulePassInFunctionManager",
+                     "Test module pass in function manager") {}
+
+    bool runOnModule(Module& m, AnalysisManager& am) override {
+        (void)m;
+        (void)am;
+        executed = true;
+        return false;
+    }
+
+    static bool executed;
+};
+
+bool TestModulePassInFunctionManager::executed = false;
+
+TEST_F(PassManagerTest, ModulePassInFunctionPassManager) {
+    auto* func =
+        createFunctionWithBlocks(context.get(), module.get(), "test_func");
+
+    TestModulePassInFunctionManager::executed = false;
+
+    FunctionPassManager fpm(func);
+    fpm.addPass<TestModulePassInFunctionManager>();
+
+    // Run with module pass in function pass manager - should handle gracefully
+    bool result = fpm.run();
+    EXPECT_FALSE(result);
+    EXPECT_FALSE(TestModulePassInFunctionManager::executed);
+}
+
+// Test for BasicBlock pass run in PassManager (lines 54-58 coverage)
+class TestBasicBlockPassInPassManager : public BasicBlockPass {
+   public:
+    TestBasicBlockPassInPassManager()
+        : BasicBlockPass("TestBasicBlockPassInPassManager",
+                         "Test BB pass in pass manager") {}
+
+    bool runOnBasicBlock(BasicBlock& bb, AnalysisManager& am) override {
+        (void)am;
+        processedBlocks.push_back(&bb);
+        return false;
+    }
+
+    static std::vector<BasicBlock*> processedBlocks;
+};
+
+std::vector<BasicBlock*> TestBasicBlockPassInPassManager::processedBlocks;
+
+TEST_F(PassManagerTest, BasicBlockPassInPassManager) {
+    createFunctionWithBlocks(context.get(), module.get(), "test_func");
+
+    TestBasicBlockPassInPassManager::processedBlocks.clear();
+
+    PassManager pm;
+    pm.addPass<TestBasicBlockPassInPassManager>();
+
+    // Run BasicBlock pass in PassManager - should run on all blocks in all
+    // functions
+    bool result = pm.run(*module);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(TestBasicBlockPassInPassManager::processedBlocks.size(),
+              3u);  // 3 blocks in the function
+}
+
 }  // namespace

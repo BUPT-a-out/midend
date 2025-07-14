@@ -103,4 +103,121 @@ TEST_F(TypeTest, TypeCasting) {
     EXPECT_EQ(floatTy, nullptr);
 }
 
+TEST_F(TypeTest, TypeStaticGetMethods) {
+    // Test FloatType::get static method
+    auto* floatTy1 = FloatType::get(context.get());
+    auto* floatTy2 = context->getFloatType();
+    EXPECT_EQ(floatTy1, floatTy2);
+    EXPECT_TRUE(floatTy1->isFloatType());
+
+    // Test VoidType::get static method
+    auto* voidTy1 = VoidType::get(context.get());
+    auto* voidTy2 = context->getVoidType();
+    EXPECT_EQ(voidTy1, voidTy2);
+    EXPECT_TRUE(voidTy1->isVoidType());
+}
+
+TEST_F(TypeTest, FunctionTypeToString) {
+    auto* int32Ty = context->getInt32Type();
+    auto* voidTy = context->getVoidType();
+    auto* floatTy = context->getFloatType();
+
+    // Test function with no parameters
+    auto* fnTy1 = FunctionType::get(voidTy, {});
+    EXPECT_EQ(fnTy1->toString(), "void ()");
+
+    // Test function with single parameter
+    auto* fnTy2 = FunctionType::get(int32Ty, {floatTy});
+    EXPECT_EQ(fnTy2->toString(), "i32 (float)");
+
+    // Test function with multiple parameters
+    std::vector<Type*> params = {int32Ty, floatTy, int32Ty};
+    auto* fnTy3 = FunctionType::get(voidTy, params);
+    EXPECT_EQ(fnTy3->toString(), "void (i32, float, i32)");
+
+    // Test variadic function with no parameters
+    auto* fnTy4 = FunctionType::get(int32Ty, {}, true);
+    EXPECT_EQ(fnTy4->toString(), "i32 (...)");
+
+    // Test variadic function with parameters
+    auto* fnTy5 = FunctionType::get(voidTy, {int32Ty, floatTy}, true);
+    EXPECT_EQ(fnTy5->toString(), "void (i32, float, ...)");
+}
+
+TEST_F(TypeTest, PointerToMethods) {
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+    auto* voidTy = context->getVoidType();
+
+    // Test IntegerType::getPointerTo
+    auto* intPtrTy = int32Ty->getPointerTo();
+    EXPECT_TRUE(intPtrTy->isPointerType());
+    EXPECT_EQ(intPtrTy->getElementType(), int32Ty);
+
+    // Test FloatType::getPointerTo
+    auto* floatPtrTy = floatTy->getPointerTo();
+    EXPECT_TRUE(floatPtrTy->isPointerType());
+    EXPECT_EQ(floatPtrTy->getElementType(), floatTy);
+
+    // Test VoidType::getPointerTo
+    auto* voidPtrTy = voidTy->getPointerTo();
+    EXPECT_TRUE(voidPtrTy->isPointerType());
+    EXPECT_EQ(voidPtrTy->getElementType(), voidTy);
+}
+
+TEST_F(TypeTest, PointerTypeBitWidth) {
+    auto* int32Ty = context->getInt32Type();
+    auto* ptrTy = PointerType::get(int32Ty);
+
+    // Test PointerType::getBitWidth - line 128 in Type.h
+    EXPECT_EQ(ptrTy->getBitWidth(), 64u);
+}
+
+TEST_F(TypeTest, FunctionTypeClassof) {
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {});
+
+    // Test FunctionType::classof - lines 188-189 in Type.h
+    EXPECT_TRUE(FunctionType::classof(fnTy));
+    EXPECT_FALSE(FunctionType::classof(int32Ty));
+}
+
+TEST_F(TypeTest, LabelTypeGetAndToString) {
+    // Test LabelType::get and toString - line 202 in Type.h
+    auto* labelTy = LabelType::get(context.get());
+    EXPECT_EQ(labelTy->getKind(), TypeKind::Label);
+    EXPECT_EQ(labelTy->toString(), "label");
+
+    // Test that the same context returns the same label type
+    auto* labelTy2 = LabelType::get(context.get());
+    EXPECT_EQ(labelTy, labelTy2);
+
+    // Test LabelType::classof
+    EXPECT_TRUE(LabelType::classof(labelTy));
+    EXPECT_FALSE(LabelType::classof(context->getInt32Type()));
+}
+
+TEST_F(TypeTest, IntegerTypeExtended) {
+    // Test getIntegerType with supported bit widths
+    auto* int1Ty = context->getIntegerType(1);
+    auto* int32Ty = context->getIntegerType(32);
+
+    EXPECT_NE(int1Ty, nullptr);
+    EXPECT_EQ(int1Ty->getBitWidth(), 1u);
+    EXPECT_TRUE(int1Ty->isBool());
+
+    EXPECT_NE(int32Ty, nullptr);
+    EXPECT_EQ(int32Ty->getBitWidth(), 32u);
+    EXPECT_FALSE(int32Ty->isBool());
+
+    // Test unsupported bit widths should return nullptr
+    auto* int16Ty = context->getIntegerType(16);
+    auto* int64Ty = context->getIntegerType(64);
+    auto* int8Ty = context->getIntegerType(8);
+
+    EXPECT_EQ(int16Ty, nullptr);
+    EXPECT_EQ(int64Ty, nullptr);
+    EXPECT_EQ(int8Ty, nullptr);
+}
+
 }  // namespace

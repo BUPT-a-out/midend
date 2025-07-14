@@ -325,4 +325,136 @@ TEST_F(OperatorTest, InstructionClassification) {
     EXPECT_FALSE(logicalInst->isComparison());
 }
 
+TEST_F(OperatorTest, DirectBinaryOperatorCreateWithParent) {
+    auto* int32Ty = context->getInt32Type();
+    auto* val1 = ConstantInt::get(int32Ty, 10);
+    auto* val2 = ConstantInt::get(int32Ty, 20);
+    auto* boolVal = ConstantInt::getTrue(context.get());
+
+    // Test UnaryOperator::Create with parent parameter
+    auto* unaryAdd =
+        UnaryOperator::Create(Opcode::UAdd, val1, "unary_add", entryBB);
+    EXPECT_EQ(unaryAdd->getParent(), entryBB);
+    EXPECT_EQ(unaryAdd->getOpcode(), Opcode::UAdd);
+    EXPECT_EQ(unaryAdd->getOperand(), val1);
+
+    auto* unarySub =
+        UnaryOperator::Create(Opcode::USub, val1, "unary_sub", entryBB);
+    EXPECT_EQ(unarySub->getParent(), entryBB);
+    EXPECT_EQ(unarySub->getOpcode(), Opcode::USub);
+
+    auto* unaryNot =
+        UnaryOperator::Create(Opcode::Not, boolVal, "unary_not", entryBB);
+    EXPECT_EQ(unaryNot->getParent(), entryBB);
+    EXPECT_EQ(unaryNot->getOpcode(), Opcode::Not);
+
+    // Test BinaryOperator::Create with parent parameter
+    auto* binaryAdd =
+        BinaryOperator::Create(Opcode::Add, val1, val2, "binary_add", entryBB);
+    EXPECT_EQ(binaryAdd->getParent(), entryBB);
+    EXPECT_EQ(binaryAdd->getOpcode(), Opcode::Add);
+    EXPECT_EQ(binaryAdd->getOperand(0), val1);
+    EXPECT_EQ(binaryAdd->getOperand(1), val2);
+
+    auto* binarySub =
+        BinaryOperator::Create(Opcode::Sub, val1, val2, "binary_sub", entryBB);
+    EXPECT_EQ(binarySub->getParent(), entryBB);
+    EXPECT_EQ(binarySub->getOpcode(), Opcode::Sub);
+
+    auto* binaryMul =
+        BinaryOperator::Create(Opcode::Mul, val1, val2, "binary_mul", entryBB);
+    EXPECT_EQ(binaryMul->getParent(), entryBB);
+    EXPECT_EQ(binaryMul->getOpcode(), Opcode::Mul);
+
+    auto* binaryDiv =
+        BinaryOperator::Create(Opcode::Div, val1, val2, "binary_div", entryBB);
+    EXPECT_EQ(binaryDiv->getParent(), entryBB);
+    EXPECT_EQ(binaryDiv->getOpcode(), Opcode::Div);
+
+    auto* binaryRem =
+        BinaryOperator::Create(Opcode::Rem, val1, val2, "binary_rem", entryBB);
+    EXPECT_EQ(binaryRem->getParent(), entryBB);
+    EXPECT_EQ(binaryRem->getOpcode(), Opcode::Rem);
+
+    auto* binaryLAnd = BinaryOperator::Create(Opcode::LAnd, boolVal, boolVal,
+                                              "binary_land", entryBB);
+    EXPECT_EQ(binaryLAnd->getParent(), entryBB);
+    EXPECT_EQ(binaryLAnd->getOpcode(), Opcode::LAnd);
+
+    auto* binaryLOr = BinaryOperator::Create(Opcode::LOr, boolVal, boolVal,
+                                             "binary_lor", entryBB);
+    EXPECT_EQ(binaryLOr->getParent(), entryBB);
+    EXPECT_EQ(binaryLOr->getOpcode(), Opcode::LOr);
+
+    // Test CmpInst::Create with parent parameter
+    auto* cmpEQ = CmpInst::Create(Opcode::ICmpEQ, CmpInst::ICMP_EQ, val1, val2,
+                                  "cmp_eq", entryBB);
+    EXPECT_EQ(cmpEQ->getParent(), entryBB);
+    EXPECT_EQ(cmpEQ->getOpcode(), Opcode::ICmpEQ);
+    EXPECT_EQ(cmpEQ->getPredicate(), CmpInst::ICMP_EQ);
+
+    auto* cmpNE = CmpInst::Create(Opcode::ICmpNE, CmpInst::ICMP_NE, val1, val2,
+                                  "cmp_ne", entryBB);
+    EXPECT_EQ(cmpNE->getParent(), entryBB);
+    EXPECT_EQ(cmpNE->getOpcode(), Opcode::ICmpNE);
+
+    auto* cmpSLT = CmpInst::Create(Opcode::ICmpSLT, CmpInst::ICMP_SLT, val1,
+                                   val2, "cmp_slt", entryBB);
+    EXPECT_EQ(cmpSLT->getParent(), entryBB);
+    EXPECT_EQ(cmpSLT->getOpcode(), Opcode::ICmpSLT);
+
+    auto* cmpSLE = CmpInst::Create(Opcode::ICmpSLE, CmpInst::ICMP_SLE, val1,
+                                   val2, "cmp_sle", entryBB);
+    EXPECT_EQ(cmpSLE->getParent(), entryBB);
+    EXPECT_EQ(cmpSLE->getOpcode(), Opcode::ICmpSLE);
+
+    auto* cmpSGT = CmpInst::Create(Opcode::ICmpSGT, CmpInst::ICMP_SGT, val1,
+                                   val2, "cmp_sgt", entryBB);
+    EXPECT_EQ(cmpSGT->getParent(), entryBB);
+    EXPECT_EQ(cmpSGT->getOpcode(), Opcode::ICmpSGT);
+
+    auto* cmpSGE = CmpInst::Create(Opcode::ICmpSGE, CmpInst::ICMP_SGE, val1,
+                                   val2, "cmp_sge", entryBB);
+    EXPECT_EQ(cmpSGE->getParent(), entryBB);
+    EXPECT_EQ(cmpSGE->getOpcode(), Opcode::ICmpSGE);
+
+    // Test floating point comparisons
+    auto* floatTy = context->getFloatType();
+    auto* fval1 = ConstantFP::get(floatTy, 3.14f);
+    auto* fval2 = ConstantFP::get(floatTy, 2.71f);
+
+    auto* fcmpOEQ = CmpInst::Create(Opcode::FCmpOEQ, CmpInst::FCMP_OEQ, fval1,
+                                    fval2, "fcmp_oeq", entryBB);
+    EXPECT_EQ(fcmpOEQ->getParent(), entryBB);
+    EXPECT_EQ(fcmpOEQ->getOpcode(), Opcode::FCmpOEQ);
+
+    auto* fcmpONE = CmpInst::Create(Opcode::FCmpONE, CmpInst::FCMP_ONE, fval1,
+                                    fval2, "fcmp_one", entryBB);
+    EXPECT_EQ(fcmpONE->getParent(), entryBB);
+    EXPECT_EQ(fcmpONE->getOpcode(), Opcode::FCmpONE);
+
+    auto* fcmpOLT = CmpInst::Create(Opcode::FCmpOLT, CmpInst::FCMP_OLT, fval1,
+                                    fval2, "fcmp_olt", entryBB);
+    EXPECT_EQ(fcmpOLT->getParent(), entryBB);
+    EXPECT_EQ(fcmpOLT->getOpcode(), Opcode::FCmpOLT);
+
+    auto* fcmpOLE = CmpInst::Create(Opcode::FCmpOLE, CmpInst::FCMP_OLE, fval1,
+                                    fval2, "fcmp_ole", entryBB);
+    EXPECT_EQ(fcmpOLE->getParent(), entryBB);
+    EXPECT_EQ(fcmpOLE->getOpcode(), Opcode::FCmpOLE);
+
+    auto* fcmpOGT = CmpInst::Create(Opcode::FCmpOGT, CmpInst::FCMP_OGT, fval1,
+                                    fval2, "fcmp_ogt", entryBB);
+    EXPECT_EQ(fcmpOGT->getParent(), entryBB);
+    EXPECT_EQ(fcmpOGT->getOpcode(), Opcode::FCmpOGT);
+
+    auto* fcmpOGE = CmpInst::Create(Opcode::FCmpOGE, CmpInst::FCMP_OGE, fval1,
+                                    fval2, "fcmp_oge", entryBB);
+    EXPECT_EQ(fcmpOGE->getParent(), entryBB);
+    EXPECT_EQ(fcmpOGE->getOpcode(), Opcode::FCmpOGE);
+
+    // Verify all instructions are in the basic block
+    EXPECT_GT(entryBB->size(), 20u);
+}
+
 }  // namespace
