@@ -8,55 +8,110 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang-15
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-15
 
-    - name: Install xmake
-      run: |
-        curl -fsSL https://xmake.io/shget.text | bash
-        echo "${HOME}/.local/bin" >> $GITHUB_PATH
+      - name: Install xmake
+        run: |
+          curl -fsSL https://xmake.io/shget.text | bash
+          echo "${HOME}/.local/bin" >> $GITHUB_PATH
 
-    - name: Configure xmake
-      run: |
-        xmake config --toolchain=clang --mode=debug --yes
+      - name: Configure xmake
+        run: |
+          xmake config --toolchain=clang --mode=debug --yes
 
-    - name: Build (Debug)
-      run: |
-        xmake build
+      - name: Build (Debug)
+        run: |
+          xmake build
 
-    - name: Run tests (Debug)
-      run: |
-        xmake test
+      - name: Run tests (Debug)
+        run: |
+          xmake test
 
-    - name: Configure xmake (Release)
-      run: |
-        xmake config --toolchain=clang --mode=release
+      - name: Configure xmake (Release)
+        run: |
+          xmake config --toolchain=clang --mode=release
 
-    - name: Build (Release)
-      run: |
-        xmake build
+      - name: Build (Release)
+        run: |
+          xmake build
 
-    - name: Run tests (Release)
-      run: |
-        xmake test
+      - name: Run tests (Release)
+        run: |
+          xmake test
+
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-15 lcov
+
+      - name: Install xmake
+        run: |
+          curl -fsSL https://xmake.io/shget.text | bash
+          echo "${HOME}/.local/bin" >> $GITHUB_PATH
+
+      - name: Run coverage
+        run: |
+          xmake coverage
+
+      - name: Parse coverage and generate badge
+        run: |
+          # Extract line coverage percentage from summary.txt
+          COVERAGE=$(grep "lines\.*:" coverage/summary.txt | sed 's/.*: \([0-9.]*\)%.*/\1/')
+          echo "Coverage: ${COVERAGE}%"
+
+          # Determine badge color based on coverage percentage
+          if (( $(echo "$COVERAGE >= 90" | bc -l) )); then
+            COLOR="brightgreen"
+          elif (( $(echo "$COVERAGE >= 80" | bc -l) )); then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+
+          # Generate badge URL and download SVG
+          BADGE_URL="https://img.shields.io/badge/coverage-${COVERAGE}%25-${COLOR}"
+          curl -o coverage.svg "$BADGE_URL"
+          echo "Generated badge: $BADGE_URL"
+
+      - name: Upload coverage directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+
+      - name: Upload coverage badge
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badge
+          path: coverage.svg
+          retention-days: 30
 
   clang-format:
     name: Code Formatting Check
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install clang-format
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang-format-15
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-15
 
-    - name: Check formatting
-      run: |
-        find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | grep -v _deps | xargs clang-format-15 --dry-run --Werror
+      - name: Check formatting
+        run: |
+          find . -name '*.cpp' -o -name '*.h' | grep -v build | grep -v googletest | grep -v _deps | xargs clang-format-15 --dry-run --Werror

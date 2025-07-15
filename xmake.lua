@@ -163,6 +163,14 @@ task("coverage")
         -- Filter out standard library and gtest files
         os.exec("lcov --remove " .. gcov_info .. " '/usr/*' 'tests/*' '/Applications/*' '*/gtest/*' '*/googletest/*' '*/.xmake/*' --output-file " .. filtered_info .. " --ignore-errors path,source,unsupported,inconsistent,format,count,unused")
         
+        local out, err = os.iorun("lcov --summary " .. filtered_info .. " --ignore-errors path,source,inconsistent,unsupported,category,count > " .. coverage_dir .. "/summary.txt")
+
+        local summary_fd = io.open(path.join(coverage_dir, "summary.txt"), "w")
+        if summary_fd then
+            summary_fd:write(out)
+            summary_fd:close()
+        end
+
         os.exec("genhtml " .. filtered_info .. " --output-directory " .. coverage_dir .. " --ignore-errors source,inconsistent,unsupported,category,count")
         
         cprint("${green}Coverage report generated in: " .. coverage_dir)
