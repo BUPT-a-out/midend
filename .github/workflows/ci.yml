@@ -63,9 +63,13 @@ jobs:
           curl -fsSL https://xmake.io/shget.text | bash
           echo "${HOME}/.local/bin" >> $GITHUB_PATH
 
+      - name: Configure xmake
+        run: |
+          xmake config --toolchain=clang --mode=coverage --yes
+
       - name: Run coverage
         run: |
-          xmake coverage
+          xmake coverage --yes
 
       - name: Parse coverage and generate badge
         run: |
