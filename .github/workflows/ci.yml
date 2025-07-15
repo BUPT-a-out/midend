@@ -113,19 +113,16 @@ jobs:
           curl -o coverage.svg "$BADGE_URL"
           echo "Generated badge: $BADGE_URL"
 
+          # Update repo custom properties
+          curl -X PATCH https://api.github.com/repos/${{ github.repository }}/properties/values \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -d '{ "properties": [ { "property_name": "coverage", "value": "'"$BADGE_URL"'"} ] }'
+
       - name: Upload coverage directory
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: coverage/
-          retention-days: 90
-
-      - name: Upload coverage badge
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-badge
-          path: coverage.svg
-          compression: 0
           retention-days: 90
 
   clang-format:
