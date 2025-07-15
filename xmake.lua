@@ -158,12 +158,12 @@ task("coverage")
         local gcov_info = path.join(coverage_dir, "coverage.info")
         local filtered_info = path.join(coverage_dir, "filtered_coverage.info")
         
-        os.exec("lcov --capture --directory " .. build_dir .. " --base-directory " .. os.scriptdir() .. " --output-file " .. gcov_info .. " --ignore-errors path,source,unsupported,inconsistent,format,count")
+        os.exec("lcov --capture --directory " .. build_dir .. " --base-directory " .. os.scriptdir() .. " --output-file " .. gcov_info .. " --ignore-errors path,source,unsupported,inconsistent,format,count,version")
         
         -- Filter out standard library and gtest files
-        os.exec("lcov --remove " .. gcov_info .. " '/usr/*' 'tests/*' '/Applications/*' '*/gtest/*' '*/googletest/*' '*/.xmake/*' --output-file " .. filtered_info .. " --ignore-errors path,source,unsupported,inconsistent,format,count,unused")
+        os.exec("lcov --remove " .. gcov_info .. " '/usr/*' 'tests/*' '/Applications/*' '*/gtest/*' '*/googletest/*' '*/.xmake/*' --output-file " .. filtered_info .. " --ignore-errors source,unsupported,inconsistent,format,count,unused,version")
         
-        local out, err = os.iorun("lcov --summary " .. filtered_info .. " --ignore-errors path,source,inconsistent,unsupported,category,count > " .. coverage_dir .. "/summary.txt")
+        local out, err = os.iorun("lcov --summary " .. filtered_info .. " --ignore-errors path,source,inconsistent,unsupported,category,count,version > " .. coverage_dir .. "/summary.txt")
 
         local summary_fd = io.open(path.join(coverage_dir, "summary.txt"), "w")
         if summary_fd then
@@ -171,7 +171,7 @@ task("coverage")
             summary_fd:close()
         end
 
-        os.exec("genhtml " .. filtered_info .. " --output-directory " .. coverage_dir .. " --ignore-errors source,inconsistent,unsupported,category,count")
+        os.exec("genhtml " .. filtered_info .. " --output-directory " .. coverage_dir .. " --ignore-errors source,inconsistent,unsupported,category,count,version")
         
         cprint("${green}Coverage report generated in: " .. coverage_dir)
         cprint("${green}Open coverage/index.html in your browser to view the report")
