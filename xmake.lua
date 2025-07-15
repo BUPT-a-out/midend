@@ -28,6 +28,11 @@ target("midend")
         add_cxxflags("-O3", "-DNDEBUG")
         set_symbols("hidden")
         set_optimize("fastest")
+    elseif is_mode("coverage") then
+        add_cxxflags("-g", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping")
+        add_ldflags("-fprofile-instr-generate", "-fcoverage-mapping")
+        set_symbols("debug")
+        set_optimize("none")
     end
     
     before_build(function (target)
@@ -128,49 +133,64 @@ task("coverage")
         
         cprint("${blue}Building in coverage mode...")
         os.exec("xmake config -m coverage")
-        
-        -- Clean up old coverage files to avoid inconsistencies
-        local build_dir = path.join(os.scriptdir(), "build")
-        if os.isdir(build_dir) then
-            cprint("${blue}Cleaning old coverage files...")
-            os.exec("find " .. build_dir .. " -name '*.gcda' -delete")
-        end
-        
-        task.run("build", {target = "midend_tests"})
+
+        task.run("build", {target = "midend_tests", mode = "coverage"})
         
         local target = project.target("midend_tests")
         local target_executable = path.absolute(target:targetfile())
-        
-        cprint("${blue}Running tests to generate coverage data...")
-        os.exec(target_executable)
         
         cprint("${blue}Generating HTML coverage report...")
         local coverage_dir = path.join(os.scriptdir(), "coverage")
         local build_dir = path.join(os.scriptdir(), "build")
         os.mkdir(coverage_dir)
         
-        local gcov_info = path.join(coverage_dir, "coverage.info")
-        local filtered_info = path.join(coverage_dir, "filtered_coverage.info")
-            
-        os.exec("lcov --capture --directory " .. build_dir .. 
-                " --base-directory " .. os.scriptdir() .. 
-                " --no-external --output-file " .. gcov_info)
+        -- Set environment variable for coverage output
+        os.setenv("LLVM_PROFILE_FILE", path.join(coverage_dir, "coverage.profraw"))
         
-        os.exec("lcov --remove " .. gcov_info .. 
-                " '*/tests/*' '*/.xmake/*' '*/build/*' --output-file " .. filtered_info)
-            
-        local out, err = os.iorun("lcov --summary " .. filtered_info)
-
+        cprint("${blue}Running tests with LLVM coverage...")
+        os.exec(target_executable)
+        
+        -- Find the profraw file (it might have a different name)
+        local profraw_files = os.files(path.join(coverage_dir, "*.profraw"))
+        if #profraw_files == 0 then
+            cprint("${red}No coverage data found. Make sure tests ran successfully.")
+            return
+        end
+        
+        local profraw_file = profraw_files[1]
+        local profdata_file = path.join(coverage_dir, "coverage.profdata")
+        
+        -- Merge profile data
+        cprint("${blue}Merging profile data...")
+        os.exec("llvm-profdata merge -sparse " .. profraw_file .. " -o " .. profdata_file)
+        
+        -- Get source file pattern
+        local src_files = os.files(path.join(os.scriptdir(), "src/**/*.cpp"))
+        local include_files = os.files(path.join(os.scriptdir(), "include/**/*.h"))
+        
+        -- Generate HTML report
+        cprint("${blue}Generating HTML report...")
+        local report_cmd = "llvm-cov show " .. target_executable .. 
+                          " -instr-profile=" .. profdata_file .. 
+                          " -format=html -output-dir=" .. coverage_dir ..
+                          " -ignore-filename-regex='tests/.*'"
+        
+        -- Don't add individual files, let llvm-cov discover them
+        cprint("${blue}Running: " .. report_cmd)
+        os.exec(report_cmd)
+        
+        -- Generate summary
+        cprint("${blue}Generating summary...")
+        local summary_cmd = "llvm-cov report " .. target_executable .. 
+                           " -instr-profile=" .. profdata_file ..
+                           " -ignore-filename-regex='tests/.*'"
+        
+        local out, err = os.iorun(summary_cmd)
         local summary_fd = io.open(path.join(coverage_dir, "summary.txt"), "w")
         if summary_fd then
             summary_fd:write(out)
             summary_fd:close()
         end
-        
-        os.exec("genhtml " .. filtered_info .. 
-                " --output-directory " .. coverage_dir ..
-                " --prefix " .. os.scriptdir() ..
-                " --ignore-errors source")
         
         cprint("${green}Coverage report generated in: " .. coverage_dir)
         cprint("${green}Open coverage/index.html in your browser to view the report")

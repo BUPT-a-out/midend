@@ -27,6 +27,11 @@ target("midend_tests")
         add_cxxflags("-O3", "-DNDEBUG")
         set_symbols("hidden")
         set_optimize("fastest")
+    elseif is_mode("coverage") then
+        add_cxxflags("-g", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping")
+        add_ldflags("-fprofile-instr-generate", "-fcoverage-mapping")
+        set_symbols("debug")
+        set_optimize("none")
     end
     
     add_ldflags("-pthread")

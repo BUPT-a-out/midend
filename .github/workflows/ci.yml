@@ -15,7 +15,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-15
+          sudo apt-get install -y clang-15 llvm-15
+
+      - name: Setup LLVM tools
+        run: |
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 1000
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 1000
 
       - name: Install xmake
         run: |
@@ -56,13 +61,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-15 llvm-15 lcov
+          sudo apt-get install -y clang-15 llvm-15 llvm-15-tools bc
 
-      - name: Rewrite gcov
+      - name: Setup LLVM tools
         run: |
-          echo '#!/bin/bash' | sudo tee /usr/bin/gcov
-          echo 'llvm-cov-15 gcov "$@"' | sudo tee -a /usr/bin/gcov
-          sudo chmod +x /usr/bin/gcov
+          sudo update-alternatives --install /usr/bin/llvm-profdata llvm-profdata /usr/bin/llvm-profdata-15 1000
+          sudo update-alternatives --install /usr/bin/llvm-cov llvm-cov /usr/bin/llvm-cov-15 1000
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 1000
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 1000
 
       - name: Install xmake
         run: |
@@ -75,15 +81,26 @@ jobs:
 
       - name: Run coverage
         run: |
-          xmake coverage --yes
+          xmake coverage
+          
+          # Verify coverage files were generated
+          if [ ! -f "coverage/summary.txt" ]; then
+            echo "Error: coverage/summary.txt not found"
+            exit 1
+          fi
+          
+          if [ ! -f "coverage/index.html" ]; then
+            echo "Error: coverage/index.html not found"
+            exit 1
+          fi
+          
+          echo "Coverage files generated successfully"
 
       - name: Parse coverage and generate badge
         run: |
-          # Extract line coverage percentage from summary.txt
-          COVERAGE=$(grep "lines\.*:" coverage/summary.txt | sed 's/.*: \([0-9.]*\)%.*/\1/')
+          COVERAGE=$(grep "^TOTAL" coverage/summary.txt | awk '{print $10}' | sed 's/\([0-9.]*\)%.*/\1/')
           echo "Coverage: ${COVERAGE}%"
 
-          # Determine badge color based on coverage percentage
           if (( $(echo "$COVERAGE >= 90" | bc -l) )); then
             COLOR="brightgreen"
           elif (( $(echo "$COVERAGE >= 80" | bc -l) )); then
@@ -92,7 +109,6 @@ jobs:
             COLOR="red"
           fi
 
-          # Generate badge URL and download SVG
           BADGE_URL="https://img.shields.io/badge/coverage-${COVERAGE}%25-${COLOR}"
           curl -o coverage.svg "$BADGE_URL"
           echo "Generated badge: $BADGE_URL"
