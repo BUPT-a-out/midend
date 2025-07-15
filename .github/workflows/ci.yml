@@ -118,14 +118,15 @@ jobs:
         with:
           name: coverage-report
           path: coverage/
-          retention-days: 30
+          retention-days: 90
 
       - name: Upload coverage badge
         uses: actions/upload-artifact@v4
         with:
           name: coverage-badge
           path: coverage.svg
-          retention-days: 30
+          compression: 0
+          retention-days: 90
 
   clang-format:
     name: Code Formatting Check
