@@ -304,4 +304,51 @@ TEST_F(ConstantTest, ConstantExprOperandAccess) {
     EXPECT_EQ(addExpr->getOperand(1), val2);
 }
 
+TEST_F(ConstantTest, ConstantIntContextBitWidthCreation) {
+    // Test ConstantInt::get(Context*, unsigned, uint64_t) - lines 24-26
+    auto* const1 = ConstantInt::get(context.get(), 1, 1);
+    EXPECT_EQ(const1->getValue(), 1u);
+    EXPECT_TRUE(const1->getType()->isIntegerType());
+    EXPECT_EQ(static_cast<IntegerType*>(const1->getType())->getBitWidth(), 1u);
+
+    auto* const32 = ConstantInt::get(context.get(), 32, 65535);
+    EXPECT_EQ(const32->getValue(), 65535u);
+    EXPECT_TRUE(const32->getType()->isIntegerType());
+    EXPECT_EQ(static_cast<IntegerType*>(const32->getType())->getBitWidth(), 32u);
+
+    // Test caching works with this overload
+    auto* const1Again = ConstantInt::get(context.get(), 1, 1);
+    EXPECT_EQ(const1, const1Again);
+}
+
+TEST_F(ConstantTest, ConstantExprTypeMismatchAdd) {
+    // Test ConstantExpr::getAdd type mismatch - lines 68-70
+    auto* int32Ty = context->getInt32Type();
+    auto* int1Ty = context->getInt1Type();
+    auto* val32 = ConstantInt::get(int32Ty, 10);
+    auto* val1 = ConstantInt::get(int1Ty, 1);
+
+    EXPECT_THROW(ConstantExpr::getAdd(val32, val1), std::runtime_error);
+}
+
+TEST_F(ConstantTest, ConstantExprTypeMismatchSub) {
+    // Test ConstantExpr::getSub type mismatch - lines 76-78
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+    auto* val32 = ConstantInt::get(int32Ty, 10);
+    auto* valFloat = ConstantFP::get(floatTy, 20.5f);
+
+    EXPECT_THROW(ConstantExpr::getSub(val32, valFloat), std::runtime_error);
+}
+
+TEST_F(ConstantTest, ConstantExprTypeMismatchMul) {
+    // Test ConstantExpr::getMul type mismatch - lines 84-86
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+    auto* val32 = ConstantInt::get(int32Ty, 10);
+    auto* valFloat = ConstantFP::get(floatTy, 20.0f);
+
+    EXPECT_THROW(ConstantExpr::getMul(val32, valFloat), std::runtime_error);
+}
+
 }  // namespace

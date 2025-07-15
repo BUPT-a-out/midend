@@ -455,6 +455,26 @@ TEST_F(DominanceTest, DominanceAnalysisPass) {
     EXPECT_EQ(domInfo->getFunction(), func);
 }
 
+TEST_F(DominanceTest, DominanceAnalysisStaticRun) {
+    // Test DominanceAnalysis::run static method - lines 133-134
+    auto* func = createDiamondFunction();
+    
+    // Use the static run method
+    auto result = DominanceAnalysis::run(*func);
+    ASSERT_NE(result, nullptr);
+    
+    // Verify the result is valid
+    EXPECT_TRUE(result->verify());
+    EXPECT_EQ(result->getFunction(), func);
+    
+    // Test with a different function
+    auto* linearFunc = createLinearFunction();
+    auto linearResult = DominanceAnalysis::run(*linearFunc);
+    ASSERT_NE(linearResult, nullptr);
+    EXPECT_TRUE(linearResult->verify());
+    EXPECT_EQ(linearResult->getFunction(), linearFunc);
+}
+
 TEST_F(DominanceTest, NestedLoopsWithMultipleBackEdges) {
     // Create nested loops: entry -> outer_header -> inner_header -> inner_body
     // -> inner_header | outer_body -> outer_header | exit
