@@ -28,11 +28,6 @@ target("midend")
         add_cxxflags("-O3", "-DNDEBUG")
         set_symbols("hidden")
         set_optimize("fastest")
-    elseif is_mode("coverage") then
-        add_cxxflags("-g", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping")
-        add_ldflags("-fprofile-instr-generate")
-        set_symbols("debug")
-        set_optimize("none")
     end
     
     before_build(function (target)
@@ -154,24 +149,28 @@ task("coverage")
         local build_dir = path.join(os.scriptdir(), "build")
         os.mkdir(coverage_dir)
         
-        -- Use gcov to generate coverage report from .gcda files
         local gcov_info = path.join(coverage_dir, "coverage.info")
         local filtered_info = path.join(coverage_dir, "filtered_coverage.info")
+            
+        os.exec("lcov --capture --directory " .. build_dir .. 
+                " --base-directory " .. os.scriptdir() .. 
+                " --no-external --output-file " .. gcov_info)
         
-        os.exec("lcov --capture --directory " .. build_dir .. " --base-directory " .. os.scriptdir() .. " --output-file " .. gcov_info .. " --ignore-errors path,source,unsupported,inconsistent,format,count,version")
-        
-        -- Filter out standard library and gtest files
-        os.exec("lcov --remove " .. gcov_info .. " '/usr/*' 'tests/*' '/Applications/*' '*/gtest/*' '*/googletest/*' '*/.xmake/*' --output-file " .. filtered_info .. " --ignore-errors source,unsupported,inconsistent,format,count,unused,version")
-        
-        local out, err = os.iorun("lcov --summary " .. filtered_info .. " --ignore-errors path,source,inconsistent,unsupported,category,count,version > " .. coverage_dir .. "/summary.txt")
+        os.exec("lcov --remove " .. gcov_info .. 
+                " '*/tests/*' '*/.xmake/*' '*/build/*' --output-file " .. filtered_info)
+            
+        local out, err = os.iorun("lcov --summary " .. filtered_info)
 
         local summary_fd = io.open(path.join(coverage_dir, "summary.txt"), "w")
         if summary_fd then
             summary_fd:write(out)
             summary_fd:close()
         end
-
-        os.exec("genhtml " .. filtered_info .. " --output-directory " .. coverage_dir .. " --ignore-errors source,inconsistent,unsupported,category,count,version")
+        
+        os.exec("genhtml " .. filtered_info .. 
+                " --output-directory " .. coverage_dir ..
+                " --prefix " .. os.scriptdir() ..
+                " --ignore-errors source")
         
         cprint("${green}Coverage report generated in: " .. coverage_dir)
         cprint("${green}Open coverage/index.html in your browser to view the report")
