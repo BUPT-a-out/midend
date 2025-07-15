@@ -189,6 +189,16 @@ void IRPrinter::printInstruction(const Instruction* inst) {
             result += getValueName(inst->getOperand(0)) + ", ";
             result += getValueName(inst->getOperand(1));
             break;
+        case Opcode::Shl:
+            result += "shl " + printType(inst->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
+        case Opcode::Shr:
+            result += "lshr " + printType(inst->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
 
         // Logical operations (typically on i1)
         case Opcode::LAnd:
@@ -258,6 +268,42 @@ void IRPrinter::printInstruction(const Instruction* inst) {
         case Opcode::ICmpSGE:
             result +=
                 "icmp sge " + printType(inst->getOperand(0)->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
+        case Opcode::FCmpOEQ:
+            result +=
+                "fcmp oeq " + printType(inst->getOperand(0)->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
+        case Opcode::FCmpONE:
+            result +=
+                "fcmp one " + printType(inst->getOperand(0)->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
+        case Opcode::FCmpOLT:
+            result +=
+                "fcmp olt " + printType(inst->getOperand(0)->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
+        case Opcode::FCmpOLE:
+            result +=
+                "fcmp ole " + printType(inst->getOperand(0)->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
+        case Opcode::FCmpOGT:
+            result +=
+                "fcmp ogt " + printType(inst->getOperand(0)->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += getValueName(inst->getOperand(1));
+            break;
+        case Opcode::FCmpOGE:
+            result +=
+                "fcmp oge " + printType(inst->getOperand(0)->getType()) + " ";
             result += getValueName(inst->getOperand(0)) + ", ";
             result += getValueName(inst->getOperand(1));
             break;
@@ -392,7 +438,19 @@ void IRPrinter::printInstruction(const Instruction* inst) {
             result += getValueName(inst->getOperand(0));
             break;
 
+        case Opcode::Select:
+            result +=
+                "select " + printType(inst->getOperand(0)->getType()) + " ";
+            result += getValueName(inst->getOperand(0)) + ", ";
+            result += printType(inst->getOperand(1)->getType()) + " ";
+            result += getValueName(inst->getOperand(1)) + ", ";
+            result += printType(inst->getOperand(2)->getType()) + " ";
+            result += getValueName(inst->getOperand(2));
+            break;
+
         default:
+            std::cerr << "Unknown instruction opcode: "
+                      << static_cast<int>(inst->getOpcode()) << "\n";
             result += "<unknown instruction>";
             break;
     }

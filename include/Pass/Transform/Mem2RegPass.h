@@ -15,6 +15,8 @@ namespace midend {
 
 class Mem2RegContext {
    private:
+    using ValueStack = std::vector<std::unordered_map<AllocaInst*, Value*>>;
+
     std::unordered_map<BasicBlock*, std::unordered_map<AllocaInst*, Value*>>
         valueMap_;
     std::unordered_set<AllocaInst*> promotableAllocas_;
@@ -28,9 +30,9 @@ class Mem2RegContext {
     void collectPromotableAllocas(Function& function);
     void insertPhiNodes(Function& function);
     void performSSAConstruction(Function& function);
-    void renameVariables(
-        BasicBlock* block,
-        std::unordered_map<AllocaInst*, Value*>& currentValues);
+    void renameVariables(BasicBlock* block, ValueStack& valueStack);
+    Value* decideVariableValue(AllocaInst* alloca,
+                               const ValueStack& valueStack);
     void cleanupInstructions();
 
     Value* lookupValue(BasicBlock* block, AllocaInst* alloca);

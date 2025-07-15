@@ -225,7 +225,6 @@ TEST_F(InstructionTest, InstructionMovement) {
 
 TEST_F(InstructionTest, MemoryOpsDirectCreateWithParent) {
     auto* int32Ty = context->getInt32Type();
-    auto* ptrTy = PointerType::get(int32Ty);
     auto* arraySize = builder->getInt32(10);
     auto* value = builder->getInt32(42);
 
@@ -303,8 +302,6 @@ TEST_F(InstructionTest, GetElementPtrInstClone) {
 TEST_F(InstructionTest, OtherOpsDirectCreateWithParent) {
     auto* int32Ty = context->getInt32Type();
     auto* floatTy = context->getFloatType();
-    auto* ptrTy = PointerType::get(int32Ty);
-    auto* boolTy = context->getInt1Type();
 
     // Create function for call test
     auto* fnTy = FunctionType::get(int32Ty, {int32Ty, int32Ty});
@@ -608,8 +605,6 @@ TEST_F(InstructionTest, CastInstructionUtilities) {
 
 TEST_F(InstructionTest, InstructionCloneMethods) {
     auto* int32Ty = context->getInt32Type();
-    auto* floatTy = context->getFloatType();
-    auto* ptrTy = PointerType::get(int32Ty);
 
     // Test UnaryOperator clone
     auto* val = builder->getInt32(42);

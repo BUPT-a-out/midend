@@ -87,13 +87,17 @@ task("test")
     set_menu {
         usage = "xmake test",
         description = "Run midend tests",
-        options = {}
+        options = {
+            {'r', "repeat", "kv", "10", "Run the tests repeatedly; use a negative count to repeat forever."},
+        }
     }
     on_run(function ()
         import("core.project.project")
         import("core.base.task")
         import("lib.detect.find_tool")
         import("net.http")
+        import("core.base.option")
+
         local python3 = find_tool("python3")
         if not python3 then
             raise("Python3 is required to run tests")
@@ -101,12 +105,20 @@ task("test")
         task.run("build", {target = "midend_tests"})
         local target = project.target("midend_tests")
         local target_executable = path.absolute(target:targetfile())
+        local repeat_count = option.get("repeat") or 10
+
         local gtest_parallel = path.join(target:targetdir(), "scripts", "gtest_parallel.py")
         if not os.isfile(gtest_parallel) then
             cprint("${blue}gtest_parallel.py not found, downloading...")
             http.download("https://raw.githubusercontent.com/google/gtest-parallel/refs/heads/master/gtest_parallel.py", gtest_parallel)
         end
-        os.exec(python3.program .. " " .. gtest_parallel .. " -r 10 " .. target_executable)
+        if tonumber(repeat_count) < 0 then
+            while true do
+                os.exec(python3.program .. " " .. gtest_parallel .. " -r 5 " .. target_executable)
+            end
+        else
+            os.exec(python3.program .. " " .. gtest_parallel .. " -r " .. repeat_count .. " " .. target_executable)
+        end
     end)
 
 task("coverage")
@@ -155,6 +167,43 @@ task("coverage")
         
         cprint("${green}Coverage report generated in: " .. coverage_dir)
         cprint("${green}Open coverage/index.html in your browser to view the report")
+    end)
+
+task("gtest")
+    set_menu {
+        usage = "xmake gtest [filter]",
+        description = "Build and run midend tests with optional gtest filter",
+        options = {
+            {'f', "filter", "v", nil, "GTest filter pattern (e.g., 'Mem2RegTest.*')"},
+            {'r', "repeat", "kv", "1", "Run the tests repeatedly; use a negative count to repeat forever."}
+        }
+    }
+    on_run(function ()
+        import("core.project.project")
+        import("core.base.task")
+        import("core.base.option")
+        
+        -- Build the test target
+        cprint("${blue}Building midend_tests...")
+        task.run("build", {target = "midend_tests"})
+        
+        -- Get the test executable path
+        local target = project.target("midend_tests")
+        local target_executable = path.absolute(target:targetfile())
+        
+        -- Construct the command
+        local cmd = target_executable
+        local filter = option.get("filter")
+        local repeat_count = option.get("repeat")
+        if filter then
+            cmd = cmd .. " --gtest_filter=" .. filter .. " --gtest_repeat=" .. repeat_count
+        end
+        
+        cprint("${blue}Running tests...")
+        cprint("${dim}Command: " .. cmd)
+        
+        -- Run the tests
+        os.exec(cmd)
     end)
 
 task("format")

@@ -115,28 +115,49 @@ void Mem2RegContext::insertPhiNodes(Function&) {
 }
 
 void Mem2RegContext::performSSAConstruction(Function& function) {
-    std::unordered_map<AllocaInst*, Value*> currentValues;
+    std::vector<std::unordered_map<AllocaInst*, Value*>> valueStack;
 
+    std::unordered_map<AllocaInst*, Value*> initialValues;
     for (auto* alloca : promotableAllocas_) {
-        currentValues[alloca] = UndefValue::get(alloca->getAllocatedType());
+        initialValues[alloca] = UndefValue::get(alloca->getAllocatedType());
     }
+    valueStack.push_back(initialValues);
 
-    renameVariables(&function.front(), currentValues);
+    renameVariables(&function.front(), valueStack);
+}
+
+Value* Mem2RegContext::decideVariableValue(
+    AllocaInst* alloca, const Mem2RegContext::ValueStack& valueStack) {
+    for (auto it = valueStack.rbegin(); it != valueStack.rend(); ++it) {
+        const auto& currentMap = *it;
+        auto found = currentMap.find(alloca);
+        if (found != currentMap.end()) {
+            return found->second;
+        }
+    }
+    std::cerr << "Warning: No value found for alloca " << alloca->getName()
+              << ". Returning undef." << std::endl;
+
+    return UndefValue::get(alloca->getAllocatedType());
 }
 
 void Mem2RegContext::renameVariables(
-    BasicBlock* block, std::unordered_map<AllocaInst*, Value*>& currentValues) {
+    BasicBlock* block,
+    std::vector<std::unordered_map<AllocaInst*, Value*>>& valueStack) {
+    valueStack.push_back({});
+
     for (auto it = block->begin(); it != block->end() && isa<PHINode>(*it);
          ++it) {
         auto* phi = cast<PHINode>(*it);
         auto itAlloca = phiToAlloca_.find(phi);
         if (itAlloca != phiToAlloca_.end()) {
             AllocaInst* alloca = itAlloca->second;
-            currentValues[alloca] = phi;
+            valueStack.back()[alloca] = phi;
         }
     }
 
     if (visitedBlocks_.find(block) != visitedBlocks_.end()) {
+        valueStack.pop_back();
         return;
     }
     visitedBlocks_.insert(block);
@@ -147,10 +168,8 @@ void Mem2RegContext::renameVariables(
                     dyn_cast<AllocaInst>(load->getPointerOperand())) {
                 if (promotableAllocas_.find(alloca) !=
                     promotableAllocas_.end()) {
-                    auto itValue = currentValues.find(alloca);
-                    assert(itValue != currentValues.end() &&
-                           "Alloca should have a current value");
-                    load->replaceAllUsesWith(itValue->second);
+                    load->replaceAllUsesWith(
+                        decideVariableValue(alloca, valueStack));
                     instructionsToRemove_.push_back(load);
                 }
             }
@@ -159,19 +178,32 @@ void Mem2RegContext::renameVariables(
                     dyn_cast<AllocaInst>(store->getPointerOperand())) {
                 if (promotableAllocas_.find(alloca) !=
                     promotableAllocas_.end()) {
-                    currentValues[alloca] = store->getValueOperand();
+                    valueStack.back()[alloca] = store->getValueOperand();
                     instructionsToRemove_.push_back(store);
                 }
             }
         } else if (auto* branch = dyn_cast<BranchInst>(*it)) {
             for (unsigned i = 0; i < branch->getNumSuccessors(); ++i) {
                 BasicBlock* successor = branch->getSuccessor(i);
-                auto savedValues = currentValues;
-                renameVariables(successor, currentValues);
-                currentValues = savedValues;
+
+                // Set incoming values for phi nodes in successor
+                for (auto it = successor->begin();
+                     it != successor->end() && isa<PHINode>(*it); ++it) {
+                    auto* phi = cast<PHINode>(*it);
+                    auto itAlloca = phiToAlloca_.find(phi);
+                    if (itAlloca != phiToAlloca_.end()) {
+                        AllocaInst* alloca = itAlloca->second;
+                        auto value = decideVariableValue(alloca, valueStack);
+                        phi->addIncoming(value, block);
+                    }
+                }
+
+                renameVariables(successor, valueStack);
             }
         }
     }
+
+    valueStack.pop_back();
 }
 
 void Mem2RegContext::cleanupInstructions() {

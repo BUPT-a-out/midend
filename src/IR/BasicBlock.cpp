@@ -131,8 +131,6 @@ std::vector<BasicBlock*> BasicBlock::getPredecessors() const {
     }
 
     for (auto* bb : parent_->getBasicBlocks()) {
-        if (bb == this) continue;
-
         auto* terminator = bb->getTerminator();
         if (!terminator) continue;
 

@@ -599,15 +599,15 @@ TEST_F(IRPrinterTest, PrintFunctionType) {
 
     // Test function type with parameters
     auto* funcTy1 = FunctionType::get(int32Ty, {int32Ty, floatTy});
-    auto* func1 = Function::Create(funcTy1, "func_with_params", module.get());
+    Function::Create(funcTy1, "func_with_params", module.get());
 
     // Test function type with varargs
     auto* funcTy2 = FunctionType::get(voidTy, {int32Ty}, true);
-    auto* func2 = Function::Create(funcTy2, "func_varargs", module.get());
+    Function::Create(funcTy2, "func_varargs", module.get());
 
     // Test function type with no parameters
     auto* funcTy3 = FunctionType::get(int32Ty, {});
-    auto* func3 = Function::Create(funcTy3, "func_no_params", module.get());
+    Function::Create(funcTy3, "func_no_params", module.get());
 
     // Create a function that takes function pointers as parameters
     auto* ptrTy1 = PointerType::get(funcTy1);
@@ -729,7 +729,7 @@ TEST_F(IRPrinterTest, PrintAllocaWithSize) {
     IRBuilder builder(entry);
 
     auto* size = builder.getInt32(10);
-    auto* array_alloca = builder.createAlloca(int32Ty, size, "array");
+    builder.createAlloca(int32Ty, size, "array");
 
     builder.createRetVoid();
 
