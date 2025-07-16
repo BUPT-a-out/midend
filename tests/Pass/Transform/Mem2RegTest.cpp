@@ -1260,8 +1260,6 @@ TEST_F(Mem2RegTest, NestedLoopsWithAlloca) {
 
     EXPECT_TRUE(changed);
 
-    // Note: This is a complex nested loop that creates multiple phi nodes
-    // The exact output depends on the SSA construction algorithm
     EXPECT_NE(IRPrinter().print(func).find("phi"), std::string::npos);
 }
 

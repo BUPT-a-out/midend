@@ -48,6 +48,13 @@ class Mem2RegPass : public FunctionPass {
     Mem2RegPass()
         : FunctionPass("Mem2RegPass", "Memory to Register Promotion") {}
 
+    void getAnalysisUsage(
+        std::unordered_set<std::string>& required,
+        std::unordered_set<std::string>& preserved) const override {
+        required.insert("dominance");
+        preserved.insert("dominance");
+    }
+
     bool runOnFunction(Function& function, AnalysisManager& am) override {
         Mem2RegContext context;
         return context.runOnFunction(function, am);

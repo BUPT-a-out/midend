@@ -25,8 +25,9 @@ class ConstantPropagationPass : public FunctionPass {
                        "Propagate constant values and fold constant "
                        "expressions") {}
 
-    void getAnalysisUsage(std::unordered_set<std::string>& required,
-                          std::unordered_set<std::string>& preserved) const override;
+    void getAnalysisUsage(
+        std::unordered_set<std::string>& required,
+        std::unordered_set<std::string>& preserved) const override;
 
     bool runOnFunction(Function& f, AnalysisManager& am) override;
 
@@ -39,24 +40,26 @@ class ConstantPropagationPass : public FunctionPass {
     void initializeLattice(Function& f);
     void propagateConstants();
     bool processInstruction(Instruction* inst);
-    
+
     Constant* evaluateInstruction(Instruction* inst);
     Constant* evaluateBinaryOp(BinaryOperator* binOp);
     Constant* evaluateCmpInst(CmpInst* cmp);
     Constant* evaluateSelectInst(SelectInst* select);
     Constant* evaluatePHINode(PHINode* phi);
-    
+
     Constant* getLatticeValue(Value* v);
     void setLatticeValue(Value* v, Constant* c);
-    
+
     void addToWorkList(Instruction* inst);
     void addUsersToWorkList(Value* v);
-    
+
     void replaceWithConstant(Instruction* inst, Constant* c);
     void cleanupDeadInstructions();
-    
-    static Constant* foldBinaryOp(unsigned opcode, Constant* lhs, Constant* rhs);
-    static Constant* foldCmpInst(unsigned predicate, Constant* lhs, Constant* rhs);
+
+    static Constant* foldBinaryOp(unsigned opcode, Constant* lhs,
+                                  Constant* rhs);
+    static Constant* foldCmpInst(unsigned predicate, Constant* lhs,
+                                 Constant* rhs);
 };
 
 }  // namespace midend

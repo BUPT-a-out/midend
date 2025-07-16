@@ -222,11 +222,11 @@ TEST_F(PassTest, FunctionPassManagerConstAnalysisManager) {
     auto* func = Function::Create(fnTy, "test_function", module.get());
 
     FunctionPassManager fpm(func);
-    
+
     // Test const version of getAnalysisManager
     const FunctionPassManager& constFpm = fpm;
     const AnalysisManager& constAM = constFpm.getAnalysisManager();
-    
+
     // Verify it's the same as the non-const version
     AnalysisManager& nonConstAM = fpm.getAnalysisManager();
     EXPECT_EQ(&constAM, &nonConstAM);

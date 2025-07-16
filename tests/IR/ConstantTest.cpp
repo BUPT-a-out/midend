@@ -314,7 +314,8 @@ TEST_F(ConstantTest, ConstantIntContextBitWidthCreation) {
     auto* const32 = ConstantInt::get(context.get(), 32, 65535);
     EXPECT_EQ(const32->getValue(), 65535u);
     EXPECT_TRUE(const32->getType()->isIntegerType());
-    EXPECT_EQ(static_cast<IntegerType*>(const32->getType())->getBitWidth(), 32u);
+    EXPECT_EQ(static_cast<IntegerType*>(const32->getType())->getBitWidth(),
+              32u);
 
     // Test caching works with this overload
     auto* const1Again = ConstantInt::get(context.get(), 1, 1);
