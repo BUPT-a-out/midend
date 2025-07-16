@@ -25,8 +25,6 @@ class Analysis {
    public:
     virtual ~Analysis() = default;
 
-    virtual const std::string& getName() const = 0;
-
     virtual std::unique_ptr<AnalysisResult> runOnFunction(Function& f) {
         (void)f;
         return nullptr;
@@ -44,15 +42,9 @@ class Analysis {
     virtual std::vector<std::string> getDependencies() const { return {}; }
 };
 
-template <typename DerivedT>
 class AnalysisBase : public Analysis {
-   private:
-    std::string name_;
-
    public:
-    explicit AnalysisBase(const std::string& name) : name_(name) {}
-
-    const std::string& getName() const override { return name_; }
+    explicit AnalysisBase() {}
 };
 
 class AnalysisManager {
@@ -72,7 +64,7 @@ class AnalysisManager {
     template <typename AnalysisT>
     void registerAnalysisType() {
         auto analysis = std::make_unique<AnalysisT>();
-        std::string name = analysis->getName();
+        std::string name = AnalysisT::getName();
         analysisRegistry_[name] = []() {
             return std::make_unique<AnalysisT>();
         };

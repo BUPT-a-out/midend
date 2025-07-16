@@ -51,8 +51,8 @@ class Mem2RegPass : public FunctionPass {
     void getAnalysisUsage(
         std::unordered_set<std::string>& required,
         std::unordered_set<std::string>& preserved) const override {
-        required.insert("dominance");
-        preserved.insert("dominance");
+        required.insert(DominanceAnalysis::getName());
+        preserved.insert(PostDominanceAnalysis::getName());
     }
 
     bool runOnFunction(Function& function, AnalysisManager& am) override {

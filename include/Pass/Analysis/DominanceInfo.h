@@ -3,7 +3,6 @@
 #include <memory>
 #include <set>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "IR/BasicBlock.h"
@@ -136,11 +135,14 @@ class DominatorTreeBase {
 };
 
 /// Analysis pass that computes dominance information
-class DominanceAnalysis : public AnalysisBase<DominanceAnalysis> {
+class DominanceAnalysis : public AnalysisBase {
    public:
     using Result = std::unique_ptr<DominanceInfoBase<false>>;
 
-    DominanceAnalysis() : AnalysisBase("DominanceAnalysis") {}
+    static const std::string& getName() {
+        static const std::string name = "DominanceAnalysis";
+        return name;
+    }
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<DominanceInfoBase<false>>(&f);
@@ -154,11 +156,14 @@ class DominanceAnalysis : public AnalysisBase<DominanceAnalysis> {
 };
 
 /// Analysis pass that computes post-dominance information
-class PostDominanceAnalysis : public AnalysisBase<PostDominanceAnalysis> {
+class PostDominanceAnalysis : public AnalysisBase {
    public:
     using Result = std::unique_ptr<DominanceInfoBase<true>>;
 
-    PostDominanceAnalysis() : AnalysisBase("PostDominanceAnalysis") {}
+    static const std::string& getName() {
+        static const std::string name = "PostDominanceAnalysis";
+        return name;
+    }
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<DominanceInfoBase<true>>(&f);

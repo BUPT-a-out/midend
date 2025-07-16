@@ -297,9 +297,11 @@ TEST_F(AnalysisManagerTest, AnalysisOverwrite) {
 }
 
 // Test Analysis classes for new system
-class TestFunctionAnalysisImpl : public AnalysisBase<TestFunctionAnalysisImpl> {
+class TestFunctionAnalysisImpl : public AnalysisBase {
    public:
-    TestFunctionAnalysisImpl() : AnalysisBase("TestFunctionAnalysis") {}
+    TestFunctionAnalysisImpl() {}
+
+    static std::string getName() { return "TestFunctionAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<TestFunctionAnalysis>(f.getName());
@@ -308,9 +310,11 @@ class TestFunctionAnalysisImpl : public AnalysisBase<TestFunctionAnalysisImpl> {
     bool supportsFunction() const override { return true; }
 };
 
-class TestModuleAnalysisImpl : public AnalysisBase<TestModuleAnalysisImpl> {
+class TestModuleAnalysisImpl : public AnalysisBase {
    public:
-    TestModuleAnalysisImpl() : AnalysisBase("TestModuleAnalysis") {}
+    TestModuleAnalysisImpl() {}
+
+    static std::string getName() { return "TestModuleAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
         (void)m;
@@ -320,9 +324,11 @@ class TestModuleAnalysisImpl : public AnalysisBase<TestModuleAnalysisImpl> {
     bool supportsModule() const override { return true; }
 };
 
-class TestDependentAnalysis : public AnalysisBase<TestDependentAnalysis> {
+class TestDependentAnalysis : public AnalysisBase {
    public:
-    TestDependentAnalysis() : AnalysisBase("TestDependentAnalysis") {}
+    TestDependentAnalysis() {}
+
+    static std::string getName() { return "TestDependentAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<TestFunctionAnalysis>("dependent_" +
@@ -553,11 +559,11 @@ TEST_F(AnalysisManagerTest, GetRegisteredAnalyses) {
 }
 
 // Test Analysis classes with module dependencies
-class TestModuleDependentAnalysis
-    : public AnalysisBase<TestModuleDependentAnalysis> {
+class TestModuleDependentAnalysis : public AnalysisBase {
    public:
-    TestModuleDependentAnalysis()
-        : AnalysisBase("TestModuleDependentAnalysis") {}
+    TestModuleDependentAnalysis() {}
+
+    static std::string getName() { return "TestModuleDependentAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
         (void)m;
@@ -571,9 +577,11 @@ class TestModuleDependentAnalysis
     }
 };
 
-class TestFailingAnalysis : public AnalysisBase<TestFailingAnalysis> {
+class TestFailingAnalysis : public AnalysisBase {
    public:
-    TestFailingAnalysis() : AnalysisBase("TestFailingAnalysis") {}
+    TestFailingAnalysis() {}
+
+    static std::string getName() { return "TestFailingAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
         (void)m;
@@ -626,11 +634,11 @@ TEST_F(AnalysisManagerTest, ModuleAnalysisComputationFailure) {
 }
 
 // Test for function analysis returning null result
-class TestFailingFunctionAnalysis
-    : public AnalysisBase<TestFailingFunctionAnalysis> {
+class TestFailingFunctionAnalysis : public AnalysisBase {
    public:
-    TestFailingFunctionAnalysis()
-        : AnalysisBase("TestFailingFunctionAnalysis") {}
+    TestFailingFunctionAnalysis() {}
+
+    static std::string getName() { return "TestFailingFunctionAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         (void)f;

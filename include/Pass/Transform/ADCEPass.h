@@ -1,14 +1,18 @@
 #pragma once
 
 #include <queue>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
+#include "Pass/Analysis/DominanceInfo.h"
 #include "Pass/Pass.h"
 
 namespace midend {
 
 class Instruction;
 class Function;
+class BasicBlock;
 
 class ADCEPass : public FunctionPass {
    public:
@@ -17,31 +21,67 @@ class ADCEPass : public FunctionPass {
     bool runOnFunction(Function& function, AnalysisManager& am) override;
 
    private:
-    std::unordered_set<Instruction*> liveInstructions_;
-    std::queue<Instruction*> workList_;
-    bool deletedBlocks_;
+    struct BlockInfoType;
+
+    struct InstInfoType {
+        bool Live = false;
+        BlockInfoType* Block = nullptr;
+    };
+
+    struct BlockInfoType {
+        bool Live = false;
+        bool UnconditionalBranch = false;
+        bool HasLivePhiNodes = false;
+        bool CFLive = false;
+        InstInfoType* TerminatorLiveInfo = nullptr;
+        BasicBlock* BB = nullptr;
+        Instruction* Terminator = nullptr;
+        unsigned PostOrder = 0;
+
+        bool terminatorIsLive() const {
+            return TerminatorLiveInfo && TerminatorLiveInfo->Live;
+        }
+    };
+
+    std::unordered_map<BasicBlock*, BlockInfoType> BlockInfo_;
+    std::unordered_map<Instruction*, InstInfoType> InstInfo_;
+    std::unordered_set<BasicBlock*> BlocksWithDeadTerminators_;
+    std::unordered_set<BasicBlock*> NewLiveBlocks_;
+    std::vector<Instruction*> Worklist_;
+    PostDominanceInfo* PDT_;
+    bool updatedCFG;
 
     void init() {
-        liveInstructions_.clear();
-        while (!workList_.empty()) {
-            workList_.pop();
-        }
-        deletedBlocks_ = false;
+        BlockInfo_.clear();
+        InstInfo_.clear();
+        BlocksWithDeadTerminators_.clear();
+        NewLiveBlocks_.clear();
+        Worklist_.clear();
+        PDT_ = nullptr;
+        updatedCFG = false;
     }
 
     void getAnalysisUsage(
         std::unordered_set<std::string>& required,
         std::unordered_set<std::string>& preserved) const override {
-        required.insert("dominance");
-        if (!deletedBlocks_) {
-            preserved.insert("dominance");
+        required.insert(PostDominanceAnalysis::getName());
+        if (!updatedCFG) {
+            preserved.insert(PostDominanceAnalysis::getName());
         }
     }
 
-    void markInstructionLive(Instruction* inst);
+    static bool isUnconditionalBranch(Instruction* Term);
     bool isAlwaysLive(Instruction* inst);
-    void performLivenessAnalysis(Function& function);
+    bool isLive(Instruction* inst);
+    void markLive(Instruction* inst);
+    void markLive(BasicBlock* block);
+    void markLive(BlockInfoType& blockInfo);
+    void markPhiLive(Instruction* phi);
+    void initialize(Function& function);
+    void markLiveInstructions();
+    void markLiveBranchesFromControlDependences();
     bool removeDeadInstructions(Function& function);
+    void updateDeadRegions(Function& function);
 };
 
 }  // namespace midend
