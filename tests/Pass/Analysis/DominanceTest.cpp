@@ -458,15 +458,15 @@ TEST_F(DominanceTest, DominanceAnalysisPass) {
 TEST_F(DominanceTest, DominanceAnalysisStaticRun) {
     // Test DominanceAnalysis::run static method - lines 133-134
     auto* func = createDiamondFunction();
-    
+
     // Use the static run method
     auto result = DominanceAnalysis::run(*func);
     ASSERT_NE(result, nullptr);
-    
+
     // Verify the result is valid
     EXPECT_TRUE(result->verify());
     EXPECT_EQ(result->getFunction(), func);
-    
+
     // Test with a different function
     auto* linearFunc = createLinearFunction();
     auto linearResult = DominanceAnalysis::run(*linearFunc);
