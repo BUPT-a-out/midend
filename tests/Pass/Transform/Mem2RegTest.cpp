@@ -1657,3 +1657,61 @@ TEST_F(Mem2RegTest, AllocaWithVeryLongChain) {
     EXPECT_EQ(result.find("load"), std::string::npos);
     EXPECT_EQ(result.find("store"), std::string::npos);
 }
+
+TEST_F(Mem2RegTest, MaxFunction) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {intType, intType});
+    auto func =
+        Function::Create(funcType, "test_func", {"a", "b"}, module.get());
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto trueBB = BasicBlock::Create(ctx.get(), "if.true", func);
+    auto falseBB = BasicBlock::Create(ctx.get(), "if.false", func);
+    auto mergeBB = BasicBlock::Create(ctx.get(), "if.merge", func);
+    builder->setInsertPoint(entryBB);
+
+    auto* a = func->getArg(0);
+    auto* b = func->getArg(1);
+    auto allocaResult = builder->createAlloca(intType, nullptr, "result");
+    auto cond = builder->createICmpSGT(a, b, "cond");
+    builder->createCondBr(cond, trueBB, falseBB);
+    builder->setInsertPoint(trueBB);
+    builder->createStore(a, allocaResult);
+    builder->createBr(mergeBB);
+    builder->setInsertPoint(falseBB);
+    builder->createStore(b, allocaResult);
+    builder->createBr(mergeBB);
+    builder->setInsertPoint(mergeBB);
+    builder->createRet(builder->createLoad(allocaResult, "load_result"));
+    EXPECT_EQ(IRPrinter().print(func),
+              "define i32 @test_func(i32 %a, i32 %b) {\n"
+              "entry:\n"
+              "  %result = alloca i32\n"
+              "  %cond = icmp sgt i32 %a, %b\n"
+              "  br i1 %cond, label %if.true, label %if.false\n"
+              "if.true:\n"
+              "  store i32 %a, i32* %result\n"
+              "  br label %if.merge\n"
+              "if.false:\n"
+              "  store i32 %b, i32* %result\n"
+              "  br label %if.merge\n"
+              "if.merge:\n"
+              "  %load_result = load i32, i32* %result\n"
+              "  ret i32 %load_result\n"
+              "}\n");
+    Mem2RegPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(IRPrinter().print(func),
+              "define i32 @test_func(i32 %a, i32 %b) {\n"
+              "entry:\n"
+              "  %cond = icmp sgt i32 %a, %b\n"
+              "  br i1 %cond, label %if.true, label %if.false\n"
+              "if.true:\n"
+              "  br label %if.merge\n"
+              "if.false:\n"
+              "  br label %if.merge\n"
+              "if.merge:\n"
+              "  %result.phi.1 = phi i32 [ %a, %if.true ], [ %b, %if.false ]\n"
+              "  ret i32 %result.phi.1\n"
+              "}\n");
+}
