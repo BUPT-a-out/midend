@@ -1888,7 +1888,7 @@ TEST_F(DominanceTest, PostDominanceEmptyFunction) {
     EXPECT_TRUE(postDomInfo.verify());
 
     auto* virtualExit = postDomInfo.getVirtualExit();
-    EXPECT_EQ(virtualExit, nullptr);
+    EXPECT_NE(virtualExit, nullptr);
 }
 
 TEST_F(DominanceTest, PostDominanceComplexCFG) {

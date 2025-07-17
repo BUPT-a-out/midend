@@ -31,6 +31,7 @@ class BasicBlock : public Value {
     static BasicBlock* Create(Context* ctx, const std::string& name = "",
                               Function* parent = nullptr);
 
+    bool isVirtual = false;
     using iterator = std::list<Instruction*>::iterator;
     using const_iterator = std::list<Instruction*>::const_iterator;
     using reverse_iterator = std::list<Instruction*>::reverse_iterator;

@@ -6,6 +6,9 @@
 #include <stack>
 #include <unordered_set>
 
+#include "IR/IRBuilder.h"
+#include "IR/Instructions/TerminatorOps.h"
+
 namespace midend {
 
 template <bool IsPostDom>
@@ -82,14 +85,27 @@ BasicBlock* DominanceInfoBase<IsPostDom>::getVirtualExit() const {
             }
 
             // Only create virtual exit if there are multiple exit blocks
-            if (exitBlocks_.size() > 1) {
+            if (exitBlocks_.size() == 1) {
+                virtualExit_ = exitBlocks_[0];
+            } else {
                 virtualExit_ = BasicBlock::Create(function_->getContext(),
                                                   "_virtual_exit", function_);
+                virtualExit_->isVirtual = true;
+                IRBuilder builder(virtualExit_);
+                builder.createRetVoid();
                 useVirtualBlock_ = true;
-                exitBlocksSet_.insert(exitBlocks_.begin(), exitBlocks_.end());
-            } else if (exitBlocks_.size() == 1) {
-                virtualExit_ = exitBlocks_[0];
+                if (exitBlocks_.size() > 1) {
+                    exitBlocksSet_.insert(exitBlocks_.begin(),
+                                          exitBlocks_.end());
+                } else {
+                    // For infinite loops
+                    for (auto& BB : *function_) {
+                        exitBlocks_.push_back(BB);
+                        exitBlocksSet_.insert(BB);
+                    }
+                }
             }
+            assert(virtualExit_);
         }
         return virtualExit_;
     } else {

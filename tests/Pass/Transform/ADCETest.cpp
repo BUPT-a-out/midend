@@ -95,7 +95,6 @@ class ADCETest : public ::testing::Test {
 
         auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
         auto loopBB = BasicBlock::Create(ctx.get(), "loop", func);
-        auto exitBB = BasicBlock::Create(ctx.get(), "exit", func);
 
         auto param = func->getArg(0);
         auto ptr = func->getArg(1);
@@ -122,15 +121,11 @@ class ADCETest : public ::testing::Test {
         phi->addIncoming(nextI, loopBB);
 
         if (finite) {
+            auto exitBB = BasicBlock::Create(ctx.get(), "exit", func);
+
             auto cond =
                 builder->createICmpSLT(nextI, builder->getInt32(10), "cond");
             builder->createCondBr(cond, loopBB, exitBB);
-        } else {
-            builder->createBr(loopBB);  // Infinite loop
-        }
-
-        // Exit block (only for finite loops)
-        if (finite) {
             builder->setInsertPoint(exitBB);
             if (useVars) {
                 auto result = builder->createAdd(var1, var2, "result");
@@ -138,6 +133,8 @@ class ADCETest : public ::testing::Test {
             } else {
                 builder->createRet(builder->getInt32(100));
             }
+        } else {
+            builder->createBr(loopBB);  // Infinite loop
         }
 
         return func;
@@ -460,6 +457,16 @@ TEST_F(ADCETest, NoDeadCode) {
 
     std::string beforeIR = IRPrinter().print(func);
 
+    std::cout << IRPrinter().print(func) << std::endl;
+    EXPECT_EQ(beforeIR, R"(define i32 @test_func(i32 %a, i32 %b) {
+entry:
+  %add = add i32 %a, %b
+  %mul = mul i32 %add, %a
+  %sub = sub i32 %mul, %b
+  ret i32 %sub
+}
+)");
+
     // Run ADCE Pass
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
@@ -702,13 +709,13 @@ TEST_F(ADCETest, EliminateAfterMem2Reg) {
     EXPECT_EQ(IRPrinter().print(func),
               "define i32 @test_func(i32 %arg0) {\n"
               "entry:\n"
-              "  br label %bb1\n"
+              "  br label %bb2\n"
               "bb1:\n"
               "  br label %bb3\n"
               "bb2:\n"
               "  br label %bb3\n"
               "bb3:\n"
-              "  br label %bb4\n"
+              "  br label %exit\n"
               "bb4:\n"
               "  br label %exit\n"
               "exit:\n"
@@ -721,111 +728,282 @@ TEST_F(ADCETest, EliminateAfterMem2Reg) {
 TEST_F(ADCETest, IfElseWithUsedVariables) {
     auto func = createIfElseFunction("test_if_used", true, false, false);
 
-    ADCEPass pass;
-    bool changed = pass.runOnFunction(*func, *am);
-
-    EXPECT_TRUE(changed);
-
-    // var1 should be kept (used in true branch), var2 should be kept (used in
-    // false branch)
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
-    EXPECT_NE(result.find("true_val"), std::string::npos);
-    EXPECT_NE(result.find("false_val"), std::string::npos);
+    auto beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(beforeIR,
+              R"(define i32 @test_if_used(i1 %cond, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  %var2 = mul i32 5, 6
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  %true_val = add i32 %var1, 1
+  br label %merge
+false_bb:
+  %false_val = mul i32 %var2, 2
+  br label %merge
+merge:
+  %result = phi i32 [ %true_val, %true_bb ], [ %false_val, %false_bb ]
+  ret i32 %result
 }
-
-TEST_F(ADCETest, IfElseWithUnusedVariables) {
-    auto func = createIfElseFunction("test_if_unused", false, false, false);
-
-    ADCEPass pass;
-    bool changed = pass.runOnFunction(*func, *am);
-
-    EXPECT_TRUE(changed);
-
-    // All variables should be eliminated since they're not used in return
-    std::string result = IRPrinter().print(func);
-    EXPECT_EQ(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("true_val"), std::string::npos);
-    EXPECT_EQ(result.find("false_val"), std::string::npos);
-}
-
-TEST_F(ADCETest, IfElseWithStoreInTrueBranch) {
-    auto func = createIfElseFunction("test_if_store_true", false, true, false);
-
-    ADCEPass pass;
-    bool changed = pass.runOnFunction(*func, *am);
-
-    EXPECT_TRUE(changed);
-
-    // var1 and true_val should be kept due to store, var2 and false_val should
-    // be eliminated
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_NE(result.find("true_val"), std::string::npos);
-    EXPECT_EQ(result.find("false_val"), std::string::npos);
-}
-
-TEST_F(ADCETest, IfElseWithStoreInBothBranches) {
-    auto func = createIfElseFunction("test_if_store_both", false, true, true);
+)");
 
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_FALSE(changed);
+    EXPECT_EQ(IRPrinter().print(func), beforeIR);
+}
 
-    // All variables should be kept due to stores
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
-    EXPECT_NE(result.find("true_val"), std::string::npos);
-    EXPECT_NE(result.find("false_val"), std::string::npos);
+TEST_F(ADCETest, IfElseWithUnusedVariables) {
+    auto func = createIfElseFunction("test_if_unused", false, false, false);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_unused(i1 %cond, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  %var2 = mul i32 5, 6
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  %true_val = add i32 %var1, 1
+  br label %merge
+false_bb:
+  %false_val = mul i32 %var2, 2
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
+
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_unused(i1 %cond, i32* %ptr) {
+entry:
+  br label %false_bb
+true_bb:
+  br label %merge
+false_bb:
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
+}
+
+TEST_F(ADCETest, IfElseWithStoreInTrueBranch) {
+    auto func = createIfElseFunction("test_if_store_true", false, true, false);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_store_true(i1 %cond, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  %var2 = mul i32 5, 6
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  %true_val = add i32 %var1, 1
+  store i32 %true_val, i32* %ptr
+  br label %merge
+false_bb:
+  %false_val = mul i32 %var2, 2
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
+
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_store_true(i1 %cond, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  %true_val = add i32 %var1, 1
+  store i32 %true_val, i32* %ptr
+  br label %merge
+false_bb:
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
+}
+
+TEST_F(ADCETest, IfElseWithStoreInBothBranches) {
+    auto func = createIfElseFunction("test_if_store_both", false, true, true);
+
+    auto beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(beforeIR,
+              R"(define i32 @test_if_store_both(i1 %cond, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  %var2 = mul i32 5, 6
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  %true_val = add i32 %var1, 1
+  store i32 %true_val, i32* %ptr
+  br label %merge
+false_bb:
+  %false_val = mul i32 %var2, 2
+  store i32 %false_val, i32* %ptr
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_FALSE(changed);
+    EXPECT_EQ(IRPrinter().print(func), beforeIR);
 }
 
 TEST_F(ADCETest, NestedIfWithUsedVariables) {
     auto func = createNestedIfFunction("test_nested_if_used", true, false);
 
+    auto beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(
+        beforeIR,
+        R"(define i32 @test_nested_if_used(i1 %cond1, i1 %cond2, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  %var2 = mul i32 5, 6
+  br i1 %cond1, label %outer_true, label %outer_false
+outer_true:
+  %outer_val = add i32 %var1, 1
+  br i1 %cond2, label %inner_true, label %inner_false
+inner_true:
+  %inner_true_val = mul i32 %outer_val, 2
+  br label %merge
+inner_false:
+  %inner_false_val = sub i32 %outer_val, 3
+  br label %merge
+outer_false:
+  %outer_false_val = mul i32 %var2, 3
+  br label %merge
+merge:
+  %result = phi i32 [ %inner_true_val, %inner_true ], [ %inner_false_val, %inner_false ], [ %outer_false_val, %outer_false ]
+  ret i32 %result
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
-    EXPECT_TRUE(changed);
-
-    // var1 should be kept (used in inner paths), var2 should be kept (used in
-    // outer false)
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
+    EXPECT_FALSE(changed);
+    EXPECT_EQ(IRPrinter().print(func), beforeIR);
 }
 
 TEST_F(ADCETest, NestedIfWithUnusedVariables) {
     auto func = createNestedIfFunction("test_nested_if_unused", false, false);
 
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_nested_if_unused(i1 %cond1, i1 %cond2, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  %var2 = mul i32 5, 6
+  br i1 %cond1, label %outer_true, label %outer_false
+outer_true:
+  %outer_val = add i32 %var1, 1
+  br i1 %cond2, label %inner_true, label %inner_false
+inner_true:
+  %inner_true_val = mul i32 %outer_val, 2
+  br label %merge
+inner_false:
+  %inner_false_val = sub i32 %outer_val, 3
+  br label %merge
+outer_false:
+  %outer_false_val = mul i32 %var2, 3
+  br label %merge
+merge:
+  ret i32 0
+}
+)");
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
-
-    // All computation should be eliminated since return is constant
-    std::string result = IRPrinter().print(func);
-    EXPECT_EQ(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_nested_if_unused(i1 %cond1, i1 %cond2, i32* %ptr) {
+entry:
+  br label %outer_false
+outer_true:
+  br label %inner_false
+inner_true:
+  br label %merge
+inner_false:
+  br label %merge
+outer_false:
+  br label %merge
+merge:
+  ret i32 0
+}
+)");
 }
 
 TEST_F(ADCETest, NestedIfWithStoreInInnerBranch) {
     auto func = createNestedIfFunction("test_nested_if_store", false, true);
 
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_nested_if_store(i1 %cond1, i1 %cond2, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  %var2 = mul i32 5, 6
+  br i1 %cond1, label %outer_true, label %outer_false
+outer_true:
+  %outer_val = add i32 %var1, 1
+  br i1 %cond2, label %inner_true, label %inner_false
+inner_true:
+  %inner_true_val = mul i32 %outer_val, 2
+  store i32 %inner_true_val, i32* %ptr
+  br label %merge
+inner_false:
+  %inner_false_val = sub i32 %outer_val, 3
+  br label %merge
+outer_false:
+  %outer_false_val = mul i32 %var2, 3
+  br label %merge
+merge:
+  ret i32 0
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
 
-    // var1 and computation leading to store should be kept
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_NE(result.find("inner_true_val"), std::string::npos);
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_nested_if_store(i1 %cond1, i1 %cond2, i32* %ptr) {
+entry:
+  %var1 = add i32 10, 20
+  br i1 %cond1, label %outer_true, label %outer_false
+outer_true:
+  %outer_val = add i32 %var1, 1
+  br i1 %cond2, label %inner_true, label %inner_false
+inner_true:
+  %inner_true_val = mul i32 %outer_val, 2
+  store i32 %inner_true_val, i32* %ptr
+  br label %merge
+inner_false:
+  br label %merge
+outer_false:
+  br label %merge
+merge:
+  ret i32 0
+}
+)");
 }
 
 // ===================== LOOP TESTS =====================
@@ -833,77 +1011,202 @@ TEST_F(ADCETest, NestedIfWithStoreInInnerBranch) {
 TEST_F(ADCETest, FiniteLoopWithUsedVariables) {
     auto func = createLoopFunction("test_finite_loop_used", true, true, false);
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_finite_loop_used(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop ]
+  %loop_val = add i32 %i, %var1
+  %next_i = add i32 %i, 1
+  %cond = icmp slt i32 %next_i, 10
+  br i1 %cond, label %loop, label %exit
+exit:
+  %result = add i32 %var1, %var2
+  ret i32 %result
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
-    EXPECT_FALSE(changed);
+    EXPECT_TRUE(changed);
 
-    // All variables should be kept since they're used in return
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
-    EXPECT_NE(result.find("loop_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_finite_loop_used(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br label %loop
+loop:
+  br label %exit
+exit:
+  %result = add i32 %var1, %var2
+  ret i32 %result
+}
+)");
 }
 
 TEST_F(ADCETest, FiniteLoopWithUnusedVariables) {
     auto func =
         createLoopFunction("test_finite_loop_unused", true, false, false);
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_finite_loop_unused(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop ]
+  %loop_val = add i32 %i, %var1
+  %next_i = add i32 %i, 1
+  %cond = icmp slt i32 %next_i, 10
+  br i1 %cond, label %loop, label %exit
+exit:
+  ret i32 100
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
 
-    // Loop variables should be eliminated since they're not used in return
-    std::string result = IRPrinter().print(func);
-    EXPECT_EQ(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("loop_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_finite_loop_unused(i32 %param, i32* %ptr) {
+entry:
+  br label %loop
+loop:
+  br label %exit
+exit:
+  ret i32 100
+}
+)");
 }
 
 TEST_F(ADCETest, FiniteLoopWithStoreInLoop) {
     auto func = createLoopFunction("test_finite_loop_store", true, false, true);
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_finite_loop_store(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop ]
+  %loop_val = add i32 %i, %var1
+  store i32 %loop_val, i32* %ptr
+  %next_i = add i32 %i, 1
+  %cond = icmp slt i32 %next_i, 10
+  br i1 %cond, label %loop, label %exit
+exit:
+  ret i32 100
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
-    EXPECT_FALSE(changed);
+    EXPECT_TRUE(changed);  // some vars will be removed
 
-    // Loop variables should be kept due to store
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("loop_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_finite_loop_store(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop ]
+  %loop_val = add i32 %i, %var1
+  store i32 %loop_val, i32* %ptr
+  %next_i = add i32 %i, 1
+  %cond = icmp slt i32 %next_i, 10
+  br i1 %cond, label %loop, label %exit
+exit:
+  ret i32 100
+}
+)");
 }
 
 TEST_F(ADCETest, InfiniteLoopWithStore) {
     auto func =
         createLoopFunction("test_infinite_loop_store", false, false, true);
 
-    ADCEPass pass;
-    bool changed = pass.runOnFunction(*func, *am);
-
-    EXPECT_FALSE(changed);
-
-    // All loop variables should be kept due to store
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("loop_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_infinite_loop_store(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop ]
+  %loop_val = add i32 %i, %var1
+  store i32 %loop_val, i32* %ptr
+  %next_i = add i32 %i, 1
+  br label %loop
 }
-
-TEST_F(ADCETest, InfiniteLoopWithoutStore) {
-    auto func =
-        createLoopFunction("test_infinite_loop_no_store", false, false, false);
+)");
 
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
 
-    // Variables should be eliminated since they have no effect
-    std::string result = IRPrinter().print(func);
-    EXPECT_EQ(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("loop_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_infinite_loop_store(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop ]
+  %loop_val = add i32 %i, %var1
+  store i32 %loop_val, i32* %ptr
+  %next_i = add i32 %i, 1
+  br label %loop
+_virtual_exit (virtual):
+  ret void
+}
+)");
+}
+
+TEST_F(ADCETest, InfiniteLoopWithoutStore) {
+    auto func =
+        createLoopFunction("test_infinite_loop_no_store", false, false, false);
+
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_infinite_loop_no_store(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop ]
+  %loop_val = add i32 %i, %var1
+  %next_i = add i32 %i, 1
+  br label %loop
+}
+)");
+
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_infinite_loop_no_store(i32 %param, i32* %ptr) {
+entry:
+  br label %loop
+loop:
+  br label %loop
+_virtual_exit (virtual):
+  ret void
+}
+)");
 }
 
 // ===================== COMPOSITE STRUCTURE TESTS =====================
@@ -916,6 +1219,7 @@ TEST_F(ADCETest, IfInsideLoop) {
 
     auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
     auto loopBB = BasicBlock::Create(ctx.get(), "loop", func);
+    auto loopBody = BasicBlock::Create(ctx.get(), "loop_body", func);
     auto ifTrueBB = BasicBlock::Create(ctx.get(), "if_true", func);
     auto ifFalseBB = BasicBlock::Create(ctx.get(), "if_false", func);
     auto loopContBB = BasicBlock::Create(ctx.get(), "loop_cont", func);
@@ -939,14 +1243,15 @@ TEST_F(ADCETest, IfInsideLoop) {
 
     auto cond1 =
         builder->createICmpSLT(phi, builder->getInt32(10), "loop_cond");
-    builder->createCondBr(cond1, ifTrueBB, exitBB);
+    builder->createCondBr(cond1, loopBody, exitBB);
 
-    // If true branch inside loop
+    builder->setInsertPoint(loopBody);
+    auto ifCond = builder->createICmpEQ(phi, builder->getInt32(5), "if_cond");
+    builder->createCondBr(ifCond, ifTrueBB, ifFalseBB);
+
     builder->setInsertPoint(ifTrueBB);
-    auto cond2 = builder->createICmpSGT(phi, builder->getInt32(5), "if_cond");
-    builder->createCondBr(cond2, ifFalseBB, loopContBB);
+    builder->createBr(loopContBB);
 
-    // If false branch (var1 used, var2 dead)
     builder->setInsertPoint(ifFalseBB);
     auto storeVal = builder->createAdd(var1, phi, "store_val");
     builder->createStore(storeVal, ptr);
@@ -954,7 +1259,7 @@ TEST_F(ADCETest, IfInsideLoop) {
 
     // Loop continuation
     builder->setInsertPoint(loopContBB);
-    auto deadVal = builder->createMul(var2, builder->getInt32(2), "dead_val");
+    builder->createMul(var2, builder->getInt32(2), "dead_val");
     auto nextI = builder->createAdd(phi, builder->getInt32(1), "next_i");
     phi->addIncoming(nextI, loopContBB);
     builder->createBr(loopBB);
@@ -963,17 +1268,169 @@ TEST_F(ADCETest, IfInsideLoop) {
     builder->setInsertPoint(exitBB);
     builder->createRet(param);
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_in_loop(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  %var2 = mul i32 %param, 3
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop_cont ]
+  %loop_cond = icmp slt i32 %i, 10
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %if_cond = icmp eq i32 %i, 5
+  br i1 %if_cond, label %if_true, label %if_false
+if_true:
+  br label %loop_cont
+if_false:
+  %store_val = add i32 %var1, %i
+  store i32 %store_val, i32* %ptr
+  br label %loop_cont
+loop_cont:
+  %dead_val = mul i32 %var2, 2
+  %next_i = add i32 %i, 1
+  br label %loop
+exit:
+  ret i32 %param
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
 
-    // var1 should be kept (used in store), var2 and dead_val should be
-    // eliminated
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("dead_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_in_loop(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop_cont ]
+  %loop_cond = icmp slt i32 %i, 10
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %if_cond = icmp eq i32 %i, 5
+  br i1 %if_cond, label %if_true, label %if_false
+if_true:
+  br label %loop_cont
+if_false:
+  %store_val = add i32 %var1, %i
+  store i32 %store_val, i32* %ptr
+  br label %loop_cont
+loop_cont:
+  %next_i = add i32 %i, 1
+  br label %loop
+exit:
+  ret i32 %param
+}
+)");
+}
+
+TEST_F(ADCETest, IfInsideLoopWithoutStore) {
+    auto intType = ctx->getIntegerType(32);
+    auto ptrType = PointerType::get(intType);
+    auto funcType = FunctionType::get(intType, {intType, ptrType});
+    auto func = Function::Create(funcType, "test_if_in_loop", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto loopBB = BasicBlock::Create(ctx.get(), "loop", func);
+    auto loopBody = BasicBlock::Create(ctx.get(), "loop_body", func);
+    auto ifTrueBB = BasicBlock::Create(ctx.get(), "if_true", func);
+    auto ifFalseBB = BasicBlock::Create(ctx.get(), "if_false", func);
+    auto loopContBB = BasicBlock::Create(ctx.get(), "loop_cont", func);
+    auto exitBB = BasicBlock::Create(ctx.get(), "exit", func);
+
+    auto param = func->getArg(0);
+    auto ptr = func->getArg(1);
+    param->setName("param");
+    ptr->setName("ptr");
+
+    // Entry
+    builder->setInsertPoint(entryBB);
+    builder->createAdd(param, builder->getInt32(5), "var1");
+    auto var2 = builder->createMul(param, builder->getInt32(3), "var2");
+    builder->createBr(loopBB);
+
+    // Loop header
+    builder->setInsertPoint(loopBB);
+    auto phi = builder->createPHI(intType, "i");
+    phi->addIncoming(builder->getInt32(0), entryBB);
+
+    auto cond1 =
+        builder->createICmpSLT(phi, builder->getInt32(10), "loop_cond");
+    builder->createCondBr(cond1, loopBody, exitBB);
+
+    builder->setInsertPoint(loopBody);
+    auto ifCond = builder->createICmpEQ(phi, builder->getInt32(5), "if_cond");
+    builder->createCondBr(ifCond, ifTrueBB, ifFalseBB);
+
+    builder->setInsertPoint(ifTrueBB);
+    builder->createBr(loopContBB);
+
+    builder->setInsertPoint(ifFalseBB);
+    builder->createBr(loopContBB);
+
+    // Loop continuation
+    builder->setInsertPoint(loopContBB);
+    builder->createMul(var2, builder->getInt32(2), "dead_val");
+    auto nextI = builder->createAdd(phi, builder->getInt32(1), "next_i");
+    phi->addIncoming(nextI, loopContBB);
+    builder->createBr(loopBB);
+
+    // Exit
+    builder->setInsertPoint(exitBB);
+    builder->createRet(param);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_in_loop(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  %var2 = mul i32 %param, 3
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %loop_cont ]
+  %loop_cond = icmp slt i32 %i, 10
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %if_cond = icmp eq i32 %i, 5
+  br i1 %if_cond, label %if_true, label %if_false
+if_true:
+  br label %loop_cont
+if_false:
+  br label %loop_cont
+loop_cont:
+  %dead_val = mul i32 %var2, 2
+  %next_i = add i32 %i, 1
+  br label %loop
+exit:
+  ret i32 %param
+}
+)");
+
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_if_in_loop(i32 %param, i32* %ptr) {
+entry:
+  br label %loop
+loop:
+  br label %exit
+loop_body:
+  br label %if_false
+if_true:
+  br label %loop_cont
+if_false:
+  br label %loop_cont
+loop_cont:
+  br label %loop
+exit:
+  ret i32 %param
+}
+)");
 }
 
 TEST_F(ADCETest, LoopInsideIf) {
@@ -1023,12 +1480,36 @@ TEST_F(ADCETest, LoopInsideIf) {
 
     // If false - dead computation
     builder->setInsertPoint(ifFalseBB);
-    auto deadVal = builder->createSub(var2, builder->getInt32(5), "dead_val");
+    builder->createSub(var2, builder->getInt32(5), "dead_val");
     builder->createBr(mergeBB);
 
     // Merge
     builder->setInsertPoint(mergeBB);
     builder->createRet(param);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_loop_in_if(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br i1 %cond, label %if_true, label %if_false
+if_true:
+  %init_val = add i32 %var1, 1
+  br label %loop
+loop:
+  %loop_var = phi i32 [ %init_val, %if_true ], [ %next_val, %loop ]
+  %loop_val = mul i32 %loop_var, 2
+  store i32 %loop_val, i32* %ptr
+  %next_val = add i32 %loop_var, 1
+  %loop_cond = icmp slt i32 %next_val, 20
+  br i1 %loop_cond, label %loop, label %merge
+if_false:
+  %dead_val = sub i32 %var2, 5
+  br label %merge
+merge:
+  ret i32 %param
+}
+)");
 
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
@@ -1037,10 +1518,123 @@ TEST_F(ADCETest, LoopInsideIf) {
 
     // var1 should be kept (used in loop), var2 and dead_val should be
     // eliminated
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("dead_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_loop_in_if(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  br i1 %cond, label %if_true, label %if_false
+if_true:
+  %init_val = add i32 %var1, 1
+  br label %loop
+loop:
+  %loop_var = phi i32 [ %init_val, %if_true ], [ %next_val, %loop ]
+  %loop_val = mul i32 %loop_var, 2
+  store i32 %loop_val, i32* %ptr
+  %next_val = add i32 %loop_var, 1
+  %loop_cond = icmp slt i32 %next_val, 20
+  br i1 %loop_cond, label %loop, label %merge
+if_false:
+  br label %merge
+merge:
+  ret i32 %param
+}
+)");
+}
+
+TEST_F(ADCETest, LoopInsideIfWithoutStore) {
+    auto intType = ctx->getIntegerType(32);
+    auto ptrType = PointerType::get(intType);
+    auto funcType =
+        FunctionType::get(intType, {ctx->getIntegerType(1), intType, ptrType});
+    auto func = Function::Create(funcType, "test_loop_in_if", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto ifTrueBB = BasicBlock::Create(ctx.get(), "if_true", func);
+    auto loopBB = BasicBlock::Create(ctx.get(), "loop", func);
+    auto ifFalseBB = BasicBlock::Create(ctx.get(), "if_false", func);
+    auto mergeBB = BasicBlock::Create(ctx.get(), "merge", func);
+
+    auto cond = func->getArg(0);
+    auto param = func->getArg(1);
+    auto ptr = func->getArg(2);
+    cond->setName("cond");
+    param->setName("param");
+    ptr->setName("ptr");
+
+    // Entry
+    builder->setInsertPoint(entryBB);
+    auto var1 = builder->createAdd(param, builder->getInt32(10), "var1");
+    auto var2 = builder->createMul(param, builder->getInt32(2), "var2");
+    builder->createCondBr(cond, ifTrueBB, ifFalseBB);
+
+    // If true - has loop
+    builder->setInsertPoint(ifTrueBB);
+    auto initVal = builder->createAdd(var1, builder->getInt32(1), "init_val");
+    builder->createBr(loopBB);
+
+    // Loop inside if
+    builder->setInsertPoint(loopBB);
+    auto phi = builder->createPHI(intType, "loop_var");
+    phi->addIncoming(initVal, ifTrueBB);
+
+    auto nextVal = builder->createAdd(phi, builder->getInt32(1), "next_val");
+    auto loopCond =
+        builder->createICmpSLT(nextVal, builder->getInt32(20), "loop_cond");
+    phi->addIncoming(nextVal, loopBB);
+    builder->createCondBr(loopCond, loopBB, mergeBB);
+
+    // If false - dead computation
+    builder->setInsertPoint(ifFalseBB);
+    builder->createSub(var2, builder->getInt32(5), "dead_val");
+    builder->createBr(mergeBB);
+
+    // Merge
+    builder->setInsertPoint(mergeBB);
+    builder->createRet(param);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_loop_in_if(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  br i1 %cond, label %if_true, label %if_false
+if_true:
+  %init_val = add i32 %var1, 1
+  br label %loop
+loop:
+  %loop_var = phi i32 [ %init_val, %if_true ], [ %next_val, %loop ]
+  %next_val = add i32 %loop_var, 1
+  %loop_cond = icmp slt i32 %next_val, 20
+  br i1 %loop_cond, label %loop, label %merge
+if_false:
+  %dead_val = sub i32 %var2, 5
+  br label %merge
+merge:
+  ret i32 %param
+}
+)");
+
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    // var1 should be kept (used in loop), var2 and dead_val should be
+    // eliminated
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_loop_in_if(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  br label %if_false
+if_true:
+  br label %loop
+loop:
+  br label %merge
+if_false:
+  br label %merge
+merge:
+  ret i32 %param
+}
+)");
 }
 
 TEST_F(ADCETest, NestedLoops) {
@@ -1082,7 +1676,7 @@ TEST_F(ADCETest, NestedLoops) {
     auto innerVal = builder->createMul(innerPhi, outerVal, "inner_val");
     builder->createStore(innerVal, ptr);
 
-    auto deadComputation = builder->createSub(var2, innerPhi, "dead_comp");
+    builder->createSub(var2, innerPhi, "dead_comp");
 
     auto nextJ = builder->createAdd(innerPhi, builder->getInt32(1), "next_j");
     auto innerCond =
@@ -1102,6 +1696,33 @@ TEST_F(ADCETest, NestedLoops) {
     builder->setInsertPoint(outerExitBB);
     builder->createRet(param);
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_nested_loops(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  %var2 = mul i32 %param, 3
+  br label %outer_loop
+outer_loop:
+  %outer_i = phi i32 [ 0, %entry ], [ %next_i, %inner_exit ]
+  %outer_val = add i32 %outer_i, %var1
+  br label %inner_loop
+inner_loop:
+  %inner_j = phi i32 [ 0, %outer_loop ], [ %next_j, %inner_loop ]
+  %inner_val = mul i32 %inner_j, %outer_val
+  store i32 %inner_val, i32* %ptr
+  %dead_comp = sub i32 %var2, %inner_j
+  %next_j = add i32 %inner_j, 1
+  %inner_cond = icmp slt i32 %next_j, 5
+  br i1 %inner_cond, label %inner_loop, label %inner_exit
+inner_exit:
+  %next_i = add i32 %outer_i, 1
+  %outer_cond = icmp slt i32 %next_i, 3
+  br i1 %outer_cond, label %outer_loop, label %outer_exit
+outer_exit:
+  ret i32 %param
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
@@ -1109,10 +1730,132 @@ TEST_F(ADCETest, NestedLoops) {
 
     // var1 should be kept (used in store chain), var2 and dead_comp should be
     // eliminated
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("dead_comp"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_nested_loops(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  br label %outer_loop
+outer_loop:
+  %outer_i = phi i32 [ 0, %entry ], [ %next_i, %inner_exit ]
+  %outer_val = add i32 %outer_i, %var1
+  br label %inner_loop
+inner_loop:
+  %inner_j = phi i32 [ 0, %outer_loop ], [ %next_j, %inner_loop ]
+  %inner_val = mul i32 %inner_j, %outer_val
+  store i32 %inner_val, i32* %ptr
+  %next_j = add i32 %inner_j, 1
+  %inner_cond = icmp slt i32 %next_j, 5
+  br i1 %inner_cond, label %inner_loop, label %inner_exit
+inner_exit:
+  %next_i = add i32 %outer_i, 1
+  %outer_cond = icmp slt i32 %next_i, 3
+  br i1 %outer_cond, label %outer_loop, label %outer_exit
+outer_exit:
+  ret i32 %param
+}
+)");
+}
+
+TEST_F(ADCETest, NestedLoopsWithoutStore) {
+    auto intType = ctx->getIntegerType(32);
+    auto ptrType = PointerType::get(intType);
+    auto funcType = FunctionType::get(intType, {intType, ptrType});
+    auto func = Function::Create(funcType, "test_nested_loops", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto outerLoopBB = BasicBlock::Create(ctx.get(), "outer_loop", func);
+    auto innerLoopBB = BasicBlock::Create(ctx.get(), "inner_loop", func);
+    auto innerExitBB = BasicBlock::Create(ctx.get(), "inner_exit", func);
+    auto outerExitBB = BasicBlock::Create(ctx.get(), "outer_exit", func);
+
+    auto param = func->getArg(0);
+    auto ptr = func->getArg(1);
+    param->setName("param");
+    ptr->setName("ptr");
+
+    // Entry
+    builder->setInsertPoint(entryBB);
+    auto var1 = builder->createAdd(param, builder->getInt32(5), "var1");
+    auto var2 = builder->createMul(param, builder->getInt32(3), "var2");
+    builder->createBr(outerLoopBB);
+
+    // Outer loop
+    builder->setInsertPoint(outerLoopBB);
+    auto outerPhi = builder->createPHI(intType, "outer_i");
+    outerPhi->addIncoming(builder->getInt32(0), entryBB);
+
+    builder->createAdd(outerPhi, var1, "outer_val");
+    builder->createBr(innerLoopBB);
+
+    // Inner loop
+    builder->setInsertPoint(innerLoopBB);
+    auto innerPhi = builder->createPHI(intType, "inner_j");
+    innerPhi->addIncoming(builder->getInt32(0), outerLoopBB);
+
+    builder->createSub(var2, innerPhi, "dead_comp");
+
+    auto nextJ = builder->createAdd(innerPhi, builder->getInt32(1), "next_j");
+    auto innerCond =
+        builder->createICmpSLT(nextJ, builder->getInt32(5), "inner_cond");
+    innerPhi->addIncoming(nextJ, innerLoopBB);
+    builder->createCondBr(innerCond, innerLoopBB, innerExitBB);
+
+    // Inner exit
+    builder->setInsertPoint(innerExitBB);
+    auto nextI = builder->createAdd(outerPhi, builder->getInt32(1), "next_i");
+    auto outerCond =
+        builder->createICmpSLT(nextI, builder->getInt32(3), "outer_cond");
+    outerPhi->addIncoming(nextI, innerExitBB);
+    builder->createCondBr(outerCond, outerLoopBB, outerExitBB);
+
+    // Outer exit
+    builder->setInsertPoint(outerExitBB);
+    builder->createRet(param);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_nested_loops(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  %var2 = mul i32 %param, 3
+  br label %outer_loop
+outer_loop:
+  %outer_i = phi i32 [ 0, %entry ], [ %next_i, %inner_exit ]
+  %outer_val = add i32 %outer_i, %var1
+  br label %inner_loop
+inner_loop:
+  %inner_j = phi i32 [ 0, %outer_loop ], [ %next_j, %inner_loop ]
+  %dead_comp = sub i32 %var2, %inner_j
+  %next_j = add i32 %inner_j, 1
+  %inner_cond = icmp slt i32 %next_j, 5
+  br i1 %inner_cond, label %inner_loop, label %inner_exit
+inner_exit:
+  %next_i = add i32 %outer_i, 1
+  %outer_cond = icmp slt i32 %next_i, 3
+  br i1 %outer_cond, label %outer_loop, label %outer_exit
+outer_exit:
+  ret i32 %param
+}
+)");
+
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_nested_loops(i32 %param, i32* %ptr) {
+entry:
+  br label %outer_loop
+outer_loop:
+  br label %inner_loop
+inner_loop:
+  br label %inner_exit
+inner_exit:
+  br label %outer_exit
+outer_exit:
+  ret i32 %param
+}
+)");
 }
 
 // ===================== COMPLEX CFG PATTERNS =====================
@@ -1149,24 +1892,57 @@ TEST_F(ADCETest, EarlyReturn) {
     // Continue path - uses var2 in store, var3 is dead
     builder->setInsertPoint(contBB);
     builder->createStore(var2, ptr);
-    auto deadVal = builder->createAdd(var3, builder->getInt32(1), "dead_val");
+    builder->createAdd(var3, builder->getInt32(1), "dead_val");
     builder->createBr(exitBB);
 
     // Exit
     builder->setInsertPoint(exitBB);
     builder->createRet(builder->getInt32(0));
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_early_return(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  %var3 = sub i32 %param, 5
+  %cond = icmp slt i32 %param, 0
+  br i1 %cond, label %early_return, label %continue
+early_return:
+  ret i32 %var1
+continue:
+  store i32 %var2, i32* %ptr
+  %dead_val = add i32 %var3, 1
+  br label %exit
+exit:
+  ret i32 0
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
 
-    // var1 and var2 should be kept, var3 and dead_val should be eliminated
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("var3"), std::string::npos);
-    EXPECT_EQ(result.find("dead_val"), std::string::npos);
+    // var1 and var2 should be kept, var3 and dead_val should be
+    // eliminated
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_early_return(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  %cond = icmp slt i32 %param, 0
+  br i1 %cond, label %early_return, label %continue
+early_return:
+  ret i32 %var1
+continue:
+  store i32 %var2, i32* %ptr
+  br label %exit
+exit:
+  ret i32 0
+_virtual_exit (virtual):
+  ret void
+}
+)");
 }
 
 TEST_F(ADCETest, ReturnInLoop) {
@@ -1219,16 +1995,59 @@ TEST_F(ADCETest, ReturnInLoop) {
     builder->setInsertPoint(exitBB);
     builder->createRet(builder->getInt32(0));
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_return_in_loop(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 3
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %continue ]
+  %loop_val = add i32 %i, %var1
+  %return_cond = icmp eq i32 %loop_val, 15
+  br i1 %return_cond, label %return_bb, label %continue
+return_bb:
+  ret i32 %loop_val
+continue:
+  store i32 %var2, i32* %ptr
+  %next_i = add i32 %i, 1
+  %loop_cond = icmp slt i32 %next_i, 20
+  br i1 %loop_cond, label %loop, label %exit
+exit:
+  ret i32 0
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_FALSE(changed);
 
     // All variables should be kept as they're used in different paths
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
-    EXPECT_NE(result.find("loop_val"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_return_in_loop(i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 3
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next_i, %continue ]
+  %loop_val = add i32 %i, %var1
+  %return_cond = icmp eq i32 %loop_val, 15
+  br i1 %return_cond, label %return_bb, label %continue
+return_bb:
+  ret i32 %loop_val
+continue:
+  store i32 %var2, i32* %ptr
+  %next_i = add i32 %i, 1
+  %loop_cond = icmp slt i32 %next_i, 20
+  br i1 %loop_cond, label %loop, label %exit
+exit:
+  ret i32 0
+_virtual_exit (virtual):
+  ret void
+}
+)");
 }
 
 TEST_F(ADCETest, ReturnInIf) {
@@ -1266,12 +2085,32 @@ TEST_F(ADCETest, ReturnInIf) {
     // If false - uses var2 in store, var3 is dead
     builder->setInsertPoint(ifFalseBB);
     builder->createStore(var2, ptr);
-    auto deadVal = builder->createMul(var3, builder->getInt32(4), "dead_val");
+    builder->createMul(var3, builder->getInt32(4), "dead_val");
     builder->createBr(exitBB);
 
     // Exit
     builder->setInsertPoint(exitBB);
     builder->createRet(builder->getInt32(100));
+
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_return_in_if(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  %var2 = mul i32 %param, 2
+  %var3 = sub i32 %param, 1
+  br i1 %cond, label %if_true, label %if_false
+if_true:
+  %return_val = add i32 %var1, 10
+  ret i32 %return_val
+if_false:
+  store i32 %var2, i32* %ptr
+  %dead_val = mul i32 %var3, 4
+  br label %exit
+exit:
+  ret i32 100
+}
+)");
 
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
@@ -1279,11 +2118,25 @@ TEST_F(ADCETest, ReturnInIf) {
     EXPECT_TRUE(changed);
 
     // var1 and var2 should be kept, var3 and dead_val should be eliminated
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("var3"), std::string::npos);
-    EXPECT_EQ(result.find("dead_val"), std::string::npos);
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @test_return_in_if(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 5
+  %var2 = mul i32 %param, 2
+  br i1 %cond, label %if_true, label %if_false
+if_true:
+  %return_val = add i32 %var1, 10
+  ret i32 %return_val
+if_false:
+  store i32 %var2, i32* %ptr
+  br label %exit
+exit:
+  ret i32 100
+_virtual_exit (virtual):
+  ret void
+}
+)");
 }
 
 // ===================== VARIABLE USAGE PATTERN TESTS =====================
@@ -1333,18 +2186,37 @@ TEST_F(ADCETest, PartialVariableUsageInComplexCFG) {
     builder->setInsertPoint(mergeBB);
     builder->createRet(param);
 
+    auto before_ir = IRPrinter().print(func);
+    EXPECT_EQ(
+        before_ir,
+        R"(define i32 @test_partial_usage(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 1
+  %var2 = add i32 %param, 2
+  %var3 = add i32 %param, 3
+  %var4 = add i32 %param, 4
+  %var5 = add i32 %param, 5
+  br i1 %cond, label %branch1, label %branch2
+branch1:
+  %use1 = mul i32 %var1, %var3
+  %use2 = add i32 %use1, %var5
+  store i32 %use2, i32* %ptr
+  br label %merge
+branch2:
+  %use3 = sub i32 %var2, %var4
+  store i32 %use3, i32* %ptr
+  br label %merge
+merge:
+  ret i32 %param
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_FALSE(changed);
 
-    // All variables should be kept as they're used in different branches
-    std::string result = IRPrinter().print(func);
-    EXPECT_NE(result.find("var1"), std::string::npos);
-    EXPECT_NE(result.find("var2"), std::string::npos);
-    EXPECT_NE(result.find("var3"), std::string::npos);
-    EXPECT_NE(result.find("var4"), std::string::npos);
-    EXPECT_NE(result.find("var5"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func), before_ir);
 }
 
 TEST_F(ADCETest, NoVariableUsageInComplexCFG) {
@@ -1394,18 +2266,46 @@ TEST_F(ADCETest, NoVariableUsageInComplexCFG) {
     builder->setInsertPoint(mergeBB);
     builder->createRet(param);
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_no_usage(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 1
+  %var2 = add i32 %param, 2
+  %var3 = add i32 %param, 3
+  %var4 = add i32 %param, 4
+  %var5 = add i32 %param, 5
+  br i1 %cond, label %branch1, label %branch2
+branch1:
+  store i32 100, i32* %ptr
+  br label %merge
+branch2:
+  store i32 200, i32* %ptr
+  br label %merge
+merge:
+  ret i32 %param
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
 
     // All variables should be eliminated
-    std::string result = IRPrinter().print(func);
-    EXPECT_EQ(result.find("var1"), std::string::npos);
-    EXPECT_EQ(result.find("var2"), std::string::npos);
-    EXPECT_EQ(result.find("var3"), std::string::npos);
-    EXPECT_EQ(result.find("var4"), std::string::npos);
-    EXPECT_EQ(result.find("var5"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_no_usage(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  br i1 %cond, label %branch1, label %branch2
+branch1:
+  store i32 100, i32* %ptr
+  br label %merge
+branch2:
+  store i32 200, i32* %ptr
+  br label %merge
+merge:
+  ret i32 %param
+}
+)");
 }
 
 // ===================== COMBINED FEATURE TESTS =====================
@@ -1477,6 +2377,34 @@ TEST_F(ADCETest, IfLoopCombinedWithPartialUsageAndStore) {
     auto result = builder->createAdd(var2, builder->getInt32(100), "result");
     builder->createRet(result);
 
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_combined(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  %var3 = sub i32 %param, 5
+  %var4 = add i32 %param, 20
+  br i1 %cond, label %if_true, label %if_false
+if_true:
+  %init_val = add i32 %var1, 1
+  br label %loop
+loop:
+  %loop_var = phi i32 [ %init_val, %if_true ], [ %next_val, %loop ]
+  %loop_val = add i32 %loop_var, %var4
+  store i32 %loop_val, i32* %ptr
+  %dead_in_loop = mul i32 %var3, 3
+  %next_val = add i32 %loop_var, 1
+  %loop_cond = icmp slt i32 %next_val, 15
+  br i1 %loop_cond, label %loop, label %merge
+if_false:
+  %dead_in_false = sdiv i32 %var3, 2
+  br label %merge
+merge:
+  %result = add i32 %var2, 100
+  ret i32 %result
+}
+)");
+
     ADCEPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
@@ -1484,11 +2412,28 @@ TEST_F(ADCETest, IfLoopCombinedWithPartialUsageAndStore) {
 
     // var1, var2, var4 should be kept; var3 and dead computations should be
     // eliminated
-    std::string ir_result = IRPrinter().print(func);
-    EXPECT_NE(ir_result.find("var1"), std::string::npos);
-    EXPECT_NE(ir_result.find("var2"), std::string::npos);
-    EXPECT_EQ(ir_result.find("var3"), std::string::npos);
-    EXPECT_NE(ir_result.find("var4"), std::string::npos);
-    EXPECT_EQ(ir_result.find("dead_in_loop"), std::string::npos);
-    EXPECT_EQ(ir_result.find("dead_in_false"), std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_combined(i1 %cond, i32 %param, i32* %ptr) {
+entry:
+  %var1 = add i32 %param, 10
+  %var2 = mul i32 %param, 2
+  %var4 = add i32 %param, 20
+  br i1 %cond, label %if_true, label %if_false
+if_true:
+  %init_val = add i32 %var1, 1
+  br label %loop
+loop:
+  %loop_var = phi i32 [ %init_val, %if_true ], [ %next_val, %loop ]
+  %loop_val = add i32 %loop_var, %var4
+  store i32 %loop_val, i32* %ptr
+  %next_val = add i32 %loop_var, 1
+  %loop_cond = icmp slt i32 %next_val, 15
+  br i1 %loop_cond, label %loop, label %merge
+if_false:
+  br label %merge
+merge:
+  %result = add i32 %var2, 100
+  ret i32 %result
+}
+)");
 }

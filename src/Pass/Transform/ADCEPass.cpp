@@ -146,6 +146,13 @@ void ADCEPass::initialize(Function& function) {
         auto& Info = BlockInfo_[BB];
         Info.BB = BB;
         Info.Terminator = BB->getTerminator();
+        if (!Info.Terminator) {
+            std::cerr << "Warning: Block " << BB->getName()
+                      << " has no terminator instruction." << std::endl;
+            Info.Terminator = nullptr;
+        } else {
+            Info.TerminatorLiveInfo = &InstInfo_[Info.Terminator];
+        }
         Info.UnconditionalBranch = isUnconditionalBranch(Info.Terminator);
     }
 
@@ -266,12 +273,12 @@ void ADCEPass::updateDeadRegions(Function& function) {
             havePostOrder = true;
         }
 
-        // Find the successor closest to the function exit (highest PostOrder)
+        // Find the successor closest to the function exit
         BlockInfoType* PreferredSucc = nullptr;
         for (auto* Succ : BB->getSuccessors()) {
             auto* SuccInfo = &BlockInfo_[Succ];
             if (!PreferredSucc ||
-                PreferredSucc->PostOrder < SuccInfo->PostOrder) {
+                PreferredSucc->PostOrder > SuccInfo->PostOrder) {
                 PreferredSucc = SuccInfo;
             }
         }

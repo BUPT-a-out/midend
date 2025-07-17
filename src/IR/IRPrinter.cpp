@@ -462,7 +462,11 @@ void IRPrinter::printBasicBlock(const BasicBlock* bb) {
     if (!bb) return;
 
     // Print the label
-    output_ << bb->getName() << ":\n";
+    output_ << bb->getName();
+    if (bb->isVirtual) {
+        output_ << " (virtual)";
+    }
+    output_ << ":\n";
 
     // Print all instructions
     for (const auto* inst : *bb) {
