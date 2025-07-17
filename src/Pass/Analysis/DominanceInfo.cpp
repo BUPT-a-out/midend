@@ -681,8 +681,10 @@ void ReverseIDFCalculator::calculate(BBVector& IDFBlocks) {
                 // Get the post-dominance level of successor
                 unsigned SuccLevel = PostDomLevels_[Succ];
 
+                // Succ post-dominates Root
                 if (SuccLevel > RootLevel) return;
 
+                // If already visited, skip
                 if (!VisitedPQ.insert(Succ).second) return;
 
                 // Check liveness constraint
@@ -703,16 +705,9 @@ void ReverseIDFCalculator::calculate(BBVector& IDFBlocks) {
             }
 
             // Process post-dominator tree children
-            // Use PDT's dominator tree to get children nodes
-            const auto* PDomTree = PDT_.getDominatorTree();
-            if (PDomTree) {
-                if (auto* domTreeNode = PDomTree->getNode(Node)) {
-                    for (const auto& child : domTreeNode->children) {
-                        BasicBlock* childBB = child->bb;
-                        if (VisitedWorklist.insert(childBB).second) {
-                            Worklist.push_back(childBB);
-                        }
-                    }
+            for (BasicBlock* Succ : getPostDomSuccessors(Node)) {
+                if (VisitedWorklist.insert(Succ).second) {
+                    Worklist.push_back(Succ);
                 }
             }
         }
