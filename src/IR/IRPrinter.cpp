@@ -36,7 +36,7 @@ std::string IRPrinter::getValueName(const Value* v) {
     if (auto* constant = dyn_cast<Constant>(v)) {
         if (isa<IntegerType>(*constant->getType())) {
             auto* ci = static_cast<const ConstantInt*>(constant);
-            return std::to_string(ci->getValue());
+            return std::to_string(ci->getSignedValue());
         }
         if (isa<FloatType>(*constant->getType())) {
             auto* cf = static_cast<const ConstantFP*>(constant);
