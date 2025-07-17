@@ -216,4 +216,6 @@ void Mem2RegContext::cleanupInstructions() {
     }
 }
 
+REGISTER_PASS(Mem2RegPass, "mem2reg")
+
 }  // namespace midend

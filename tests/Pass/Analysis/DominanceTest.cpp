@@ -1437,4 +1437,559 @@ TEST_F(DominanceTest, PrintFunctions) {
     std::cout.rdbuf(old);
 }
 
+// ============================================================================
+// PostDominanceInfo Tests
+// ============================================================================
+
+TEST_F(DominanceTest, PostDominanceLinearCFG) {
+    // Test post-dominance for linear CFG: entry -> bb1 -> bb2 -> exit
+    auto* func = createLinearFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    // Find blocks by name
+    BasicBlock* entry = &func->front();
+    BasicBlock* bb1 = nullptr;
+    BasicBlock* bb2 = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto& bb : *func) {
+        if (bb->getName() == "bb1")
+            bb1 = bb;
+        else if (bb->getName() == "bb2")
+            bb2 = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    ASSERT_NE(bb1, nullptr);
+    ASSERT_NE(bb2, nullptr);
+    ASSERT_NE(exit, nullptr);
+
+    // In post-dominance, exit post-dominates all blocks
+    EXPECT_TRUE(postDomInfo.dominates(exit, entry));
+    EXPECT_TRUE(postDomInfo.dominates(exit, bb1));
+    EXPECT_TRUE(postDomInfo.dominates(exit, bb2));
+    EXPECT_TRUE(postDomInfo.dominates(exit, exit));
+
+    // bb2 post-dominates entry and bb1
+    EXPECT_TRUE(postDomInfo.dominates(bb2, entry));
+    EXPECT_TRUE(postDomInfo.dominates(bb2, bb1));
+    EXPECT_TRUE(postDomInfo.dominates(bb2, bb2));
+    EXPECT_FALSE(postDomInfo.dominates(bb2, exit));
+
+    // bb1 post-dominates entry
+    EXPECT_TRUE(postDomInfo.dominates(bb1, entry));
+    EXPECT_TRUE(postDomInfo.dominates(bb1, bb1));
+    EXPECT_FALSE(postDomInfo.dominates(bb1, bb2));
+    EXPECT_FALSE(postDomInfo.dominates(bb1, exit));
+
+    // Verify immediate post-dominators
+    EXPECT_EQ(postDomInfo.getImmediateDominator(entry), bb1);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(bb1), bb2);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(bb2), exit);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(exit), nullptr);
+}
+
+TEST_F(DominanceTest, PostDominanceDiamondCFG) {
+    // Test post-dominance for diamond CFG: entry -> {left, right} -> merge ->
+    // exit
+    auto* func = createDiamondFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    // Find blocks by name
+    BasicBlock* entry = &func->front();
+    BasicBlock* left = nullptr;
+    BasicBlock* right = nullptr;
+    BasicBlock* merge = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto& bb : *func) {
+        if (bb->getName() == "left")
+            left = bb;
+        else if (bb->getName() == "right")
+            right = bb;
+        else if (bb->getName() == "merge")
+            merge = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    ASSERT_NE(left, nullptr);
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(merge, nullptr);
+    ASSERT_NE(exit, nullptr);
+
+    // exit post-dominates all blocks
+    EXPECT_TRUE(postDomInfo.dominates(exit, entry));
+    EXPECT_TRUE(postDomInfo.dominates(exit, left));
+    EXPECT_TRUE(postDomInfo.dominates(exit, right));
+    EXPECT_TRUE(postDomInfo.dominates(exit, merge));
+    EXPECT_TRUE(postDomInfo.dominates(exit, exit));
+
+    // merge post-dominates entry, left, and right
+    EXPECT_TRUE(postDomInfo.dominates(merge, entry));
+    EXPECT_TRUE(postDomInfo.dominates(merge, left));
+    EXPECT_TRUE(postDomInfo.dominates(merge, right));
+    EXPECT_TRUE(postDomInfo.dominates(merge, merge));
+    EXPECT_FALSE(postDomInfo.dominates(merge, exit));
+
+    // left and right do not post-dominate each other or entry
+    EXPECT_FALSE(postDomInfo.dominates(left, entry));
+    EXPECT_FALSE(postDomInfo.dominates(right, entry));
+    EXPECT_FALSE(postDomInfo.dominates(left, right));
+    EXPECT_FALSE(postDomInfo.dominates(right, left));
+
+    // Verify immediate post-dominators
+    EXPECT_EQ(postDomInfo.getImmediateDominator(entry), merge);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(left), merge);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(right), merge);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(merge), exit);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(exit), nullptr);
+}
+
+TEST_F(DominanceTest, PostDominanceMultipleExits) {
+    // Test post-dominance with multiple exit blocks - should create virtual
+    // exit
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* func = Function::Create(fnTy, "multi_exit", module.get());
+
+    auto* entry = BasicBlock::Create(context.get(), "entry", func);
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", func);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", func);
+    auto* exit1 = BasicBlock::Create(context.get(), "exit1", func);
+    auto* exit2 = BasicBlock::Create(context.get(), "exit2", func);
+
+    IRBuilder builder(entry);
+    auto* cond =
+        builder.createICmpSGT(func->getArg(0), builder.getInt32(0), "cond");
+    builder.createCondBr(cond, bb1, bb2);
+
+    builder.setInsertPoint(bb1);
+    builder.createBr(exit1);
+
+    builder.setInsertPoint(bb2);
+    builder.createBr(exit2);
+
+    builder.setInsertPoint(exit1);
+    builder.createRet(builder.getInt32(1));
+
+    builder.setInsertPoint(exit2);
+    builder.createRet(builder.getInt32(2));
+
+    PostDominanceInfo postDomInfo(func);
+
+    // Virtual exit should post-dominate all blocks
+    auto* virtualExit = postDomInfo.getVirtualExit();
+    EXPECT_TRUE(postDomInfo.isVirtualExit(virtualExit));
+
+    // Virtual exit should post-dominate everything
+    EXPECT_TRUE(postDomInfo.dominates(virtualExit, entry));
+    EXPECT_TRUE(postDomInfo.dominates(virtualExit, bb1));
+    EXPECT_TRUE(postDomInfo.dominates(virtualExit, bb2));
+    EXPECT_TRUE(postDomInfo.dominates(virtualExit, exit1));
+    EXPECT_TRUE(postDomInfo.dominates(virtualExit, exit2));
+
+    // Neither exit1 nor exit2 should post-dominate entry or each other
+    EXPECT_FALSE(postDomInfo.dominates(exit1, entry));
+    EXPECT_FALSE(postDomInfo.dominates(exit2, entry));
+    EXPECT_FALSE(postDomInfo.dominates(exit1, exit2));
+    EXPECT_FALSE(postDomInfo.dominates(exit2, exit1));
+
+    // But they should post-dominate their respective paths
+    EXPECT_TRUE(postDomInfo.dominates(exit1, bb1));
+    EXPECT_TRUE(postDomInfo.dominates(exit2, bb2));
+    EXPECT_FALSE(postDomInfo.dominates(exit1, bb2));
+    EXPECT_FALSE(postDomInfo.dominates(exit2, bb1));
+}
+
+TEST_F(DominanceTest, PostDominanceSingleExit) {
+    // Test post-dominance with single exit - should NOT create virtual exit
+    auto* func = createLinearFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    // Should not create virtual exit for single exit
+    auto* virtualExit = postDomInfo.getVirtualExit();
+    EXPECT_FALSE(postDomInfo.createdVirtualExit());
+
+    // The actual exit block should be the "virtual exit"
+    BasicBlock* exit = nullptr;
+    for (auto& bb : *func) {
+        if (bb->getName() == "exit") {
+            exit = bb;
+            break;
+        }
+    }
+    ASSERT_NE(exit, nullptr);
+    EXPECT_EQ(virtualExit, exit);
+}
+
+TEST_F(DominanceTest, PostDominanceLoopCFG) {
+    // Test post-dominance with loop
+    auto* func = createLoopFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    // Find blocks by name
+    BasicBlock* entry = &func->front();
+    BasicBlock* loop_header = nullptr;
+    BasicBlock* loop_body = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto& bb : *func) {
+        if (bb->getName() == "loop_header")
+            loop_header = bb;
+        else if (bb->getName() == "loop_body")
+            loop_body = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    ASSERT_NE(loop_header, nullptr);
+    ASSERT_NE(loop_body, nullptr);
+    ASSERT_NE(exit, nullptr);
+
+    EXPECT_TRUE(postDomInfo.dominates(exit, loop_header));
+    EXPECT_TRUE(postDomInfo.dominates(exit, loop_body));
+    EXPECT_TRUE(postDomInfo.dominates(exit, entry));
+    EXPECT_TRUE(postDomInfo.dominates(exit, exit));
+
+    EXPECT_FALSE(postDomInfo.dominates(loop_body, loop_header));
+    EXPECT_FALSE(postDomInfo.dominates(loop_body, entry));
+    EXPECT_TRUE(postDomInfo.dominates(loop_header, entry));
+    EXPECT_TRUE(postDomInfo.dominates(loop_header, loop_body));
+
+    // Verify immediate post-dominators
+    EXPECT_EQ(postDomInfo.getImmediateDominator(exit), nullptr);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(loop_header), exit);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(entry), loop_header);
+    EXPECT_EQ(postDomInfo.getImmediateDominator(loop_body), loop_header);
+}
+
+TEST_F(DominanceTest, PostDominanceTree) {
+    // Test post-dominator tree structure
+    auto* func = createDiamondFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    auto* postDomTree = postDomInfo.getDominatorTree();
+    ASSERT_NE(postDomTree, nullptr);
+
+    auto* root = postDomTree->getRoot();
+    ASSERT_NE(root, nullptr);
+
+    // In post-dominance, the root should be the exit block
+    EXPECT_EQ(root->bb->getName(), "exit");
+
+    // Test tree navigation
+    EXPECT_TRUE(postDomTree->dominates(root->bb, &func->front()));
+
+    // Test LCA functionality
+    BasicBlock* left = nullptr;
+    BasicBlock* right = nullptr;
+    BasicBlock* merge = nullptr;
+
+    for (auto& bb : *func) {
+        if (bb->getName() == "left")
+            left = bb;
+        else if (bb->getName() == "right")
+            right = bb;
+        else if (bb->getName() == "merge")
+            merge = bb;
+    }
+
+    ASSERT_NE(left, nullptr);
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(merge, nullptr);
+
+    auto* lca = postDomTree->findLCA(left, right);
+    ASSERT_NE(lca, nullptr);
+    EXPECT_EQ(lca->bb, merge);
+}
+
+TEST_F(DominanceTest, PostDominanceAnalysisPass) {
+    // Test PostDominanceAnalysis pass
+    auto* func = createDiamondFunction();
+
+    PostDominanceAnalysis analysis;
+    auto result = analysis.runOnFunction(*func);
+    ASSERT_NE(result, nullptr);
+
+    auto* postDomInfo = dynamic_cast<PostDominanceInfo*>(result.get());
+    ASSERT_NE(postDomInfo, nullptr);
+
+    // Verify the analysis result works correctly
+    BasicBlock* entry = &func->front();
+    BasicBlock* exit = nullptr;
+
+    for (auto& bb : *func) {
+        if (bb->getName() == "exit") {
+            exit = bb;
+            break;
+        }
+    }
+    ASSERT_NE(exit, nullptr);
+
+    EXPECT_TRUE(postDomInfo->dominates(exit, entry));
+    EXPECT_TRUE(analysis.supportsFunction());
+
+    // Test static run method
+    auto staticResult = PostDominanceAnalysis::run(*func);
+    ASSERT_NE(staticResult, nullptr);
+    EXPECT_TRUE(staticResult->dominates(exit, entry));
+}
+
+TEST_F(DominanceTest, PostDominanceFrontier) {
+    // Test post-dominance frontier computation
+    auto* func = createDiamondFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    // Find blocks by name
+    BasicBlock* entry = &func->front();
+    BasicBlock* left = nullptr;
+    BasicBlock* right = nullptr;
+    BasicBlock* merge = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto& bb : *func) {
+        if (bb->getName() == "left")
+            left = bb;
+        else if (bb->getName() == "right")
+            right = bb;
+        else if (bb->getName() == "merge")
+            merge = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    ASSERT_NE(left, nullptr);
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(merge, nullptr);
+    ASSERT_NE(exit, nullptr);
+
+    // Check post-dominance frontiers
+    const auto& entryPDF = postDomInfo.getDominanceFrontier(entry);
+    const auto& leftPDF = postDomInfo.getDominanceFrontier(left);
+    const auto& rightPDF = postDomInfo.getDominanceFrontier(right);
+    const auto& mergePDF = postDomInfo.getDominanceFrontier(merge);
+    const auto& exitPDF = postDomInfo.getDominanceFrontier(exit);
+
+    EXPECT_TRUE(leftPDF.find(entry) != leftPDF.end());
+    EXPECT_TRUE(rightPDF.find(entry) != rightPDF.end());
+    EXPECT_TRUE(mergePDF.empty());
+    EXPECT_TRUE(exitPDF.empty());
+    EXPECT_TRUE(entryPDF.empty());
+}
+
+TEST_F(DominanceTest, PostDominanceHelperFunctions) {
+    // Test helper functions for post-dominance
+    auto* func = createDiamondFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    BasicBlock* entry = &func->front();
+    BasicBlock* left = nullptr;
+    BasicBlock* right = nullptr;
+    BasicBlock* merge = nullptr;
+    BasicBlock* exit = nullptr;
+
+    for (auto& bb : *func) {
+        if (bb->getName() == "left")
+            left = bb;
+        else if (bb->getName() == "right")
+            right = bb;
+        else if (bb->getName() == "merge")
+            merge = bb;
+        else if (bb->getName() == "exit")
+            exit = bb;
+    }
+
+    ASSERT_NE(left, nullptr);
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(merge, nullptr);
+    ASSERT_NE(exit, nullptr);
+
+    // Test getPreds (should return successors in post-dominance)
+    auto entryPreds = postDomInfo.getPreds(entry);
+    EXPECT_EQ(entryPreds.size(), 2u);
+    EXPECT_TRUE(std::find(entryPreds.begin(), entryPreds.end(), left) !=
+                entryPreds.end());
+    EXPECT_TRUE(std::find(entryPreds.begin(), entryPreds.end(), right) !=
+                entryPreds.end());
+
+    // Test getSuccs (should return predecessors in post-dominance)
+    auto mergeSuccs = postDomInfo.getSuccs(merge);
+    EXPECT_EQ(mergeSuccs.size(), 2u);
+    EXPECT_TRUE(std::find(mergeSuccs.begin(), mergeSuccs.end(), left) !=
+                mergeSuccs.end());
+    EXPECT_TRUE(std::find(mergeSuccs.begin(), mergeSuccs.end(), right) !=
+                mergeSuccs.end());
+
+    // Test getEntry (should return exit or virtual exit)
+    auto* entryNode = postDomInfo.getEntry();
+    EXPECT_EQ(entryNode, exit);
+}
+
+TEST_F(DominanceTest, PostDominanceReversePostOrder) {
+    // Test reverse post-order traversal for post-dominance
+    auto* func = createLinearFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    auto rpo = postDomInfo.computeReversePostOrder();
+
+    // For post-dominance, the traversal should start from exit
+    // and go backwards through the CFG
+    ASSERT_FALSE(rpo.empty());
+
+    // The first block should be the exit (or virtual exit)
+    auto* firstBlock = rpo[0];
+    EXPECT_EQ(firstBlock->getName(), "exit");
+
+    // Verify all blocks are included
+    EXPECT_EQ(rpo.size(), 4u);
+
+    // Check that blocks appear in reverse topological order
+    std::set<std::string> blockNames;
+    for (auto* bb : rpo) {
+        blockNames.insert(bb->getName());
+    }
+
+    EXPECT_TRUE(blockNames.count("entry"));
+    EXPECT_TRUE(blockNames.count("bb1"));
+    EXPECT_TRUE(blockNames.count("bb2"));
+    EXPECT_TRUE(blockNames.count("exit"));
+}
+
+TEST_F(DominanceTest, PostDominanceVerification) {
+    // Test verification of post-dominance information
+    auto* func = createDiamondFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    // The post-dominance information should be valid
+    EXPECT_TRUE(postDomInfo.verify());
+
+    // Test with linear function
+    auto* linearFunc = createLinearFunction();
+    PostDominanceInfo linearPostDomInfo(linearFunc);
+    EXPECT_TRUE(linearPostDomInfo.verify());
+
+    // Test with loop function
+    auto* loopFunc = createLoopFunction();
+    PostDominanceInfo loopPostDomInfo(loopFunc);
+    EXPECT_TRUE(loopPostDomInfo.verify());
+}
+
+TEST_F(DominanceTest, PostDominanceEmptyFunction) {
+    // Test post-dominance with empty function
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {});
+    auto* func = Function::Create(fnTy, "empty", module.get());
+
+    PostDominanceInfo postDomInfo(func);
+
+    // Should handle empty function gracefully
+    EXPECT_TRUE(postDomInfo.verify());
+
+    auto* virtualExit = postDomInfo.getVirtualExit();
+    EXPECT_NE(virtualExit, nullptr);
+}
+
+TEST_F(DominanceTest, PostDominanceComplexCFG) {
+    // Test post-dominance with complex CFG
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* func = Function::Create(fnTy, "complex", module.get());
+
+    // Create a complex CFG with multiple paths and joins
+    auto* entry = BasicBlock::Create(context.get(), "entry", func);
+    auto* bb1 = BasicBlock::Create(context.get(), "bb1", func);
+    auto* bb2 = BasicBlock::Create(context.get(), "bb2", func);
+    auto* bb3 = BasicBlock::Create(context.get(), "bb3", func);
+    auto* bb4 = BasicBlock::Create(context.get(), "bb4", func);
+    auto* merge1 = BasicBlock::Create(context.get(), "merge1", func);
+    auto* merge2 = BasicBlock::Create(context.get(), "merge2", func);
+    auto* exit = BasicBlock::Create(context.get(), "exit", func);
+
+    IRBuilder builder(entry);
+    auto* cond1 =
+        builder.createICmpSGT(func->getArg(0), builder.getInt32(0), "cond1");
+    builder.createCondBr(cond1, bb1, bb2);
+
+    builder.setInsertPoint(bb1);
+    auto* cond2 =
+        builder.createICmpSGT(func->getArg(0), builder.getInt32(10), "cond2");
+    builder.createCondBr(cond2, bb3, bb4);
+
+    builder.setInsertPoint(bb2);
+    builder.createBr(merge1);
+
+    builder.setInsertPoint(bb3);
+    builder.createBr(merge1);
+
+    builder.setInsertPoint(bb4);
+    builder.createBr(merge2);
+
+    builder.setInsertPoint(merge1);
+    builder.createBr(merge2);
+
+    builder.setInsertPoint(merge2);
+    builder.createBr(exit);
+
+    builder.setInsertPoint(exit);
+    builder.createRet(builder.getInt32(42));
+
+    PostDominanceInfo postDomInfo(func);
+
+    // exit should post-dominate all blocks
+    EXPECT_TRUE(postDomInfo.dominates(exit, entry));
+    EXPECT_TRUE(postDomInfo.dominates(exit, bb1));
+    EXPECT_TRUE(postDomInfo.dominates(exit, bb2));
+    EXPECT_TRUE(postDomInfo.dominates(exit, bb3));
+    EXPECT_TRUE(postDomInfo.dominates(exit, bb4));
+    EXPECT_TRUE(postDomInfo.dominates(exit, merge1));
+    EXPECT_TRUE(postDomInfo.dominates(exit, merge2));
+
+    // merge2 should post-dominate all blocks except exit
+    EXPECT_TRUE(postDomInfo.dominates(merge2, entry));
+    EXPECT_TRUE(postDomInfo.dominates(merge2, bb1));
+    EXPECT_TRUE(postDomInfo.dominates(merge2, bb2));
+    EXPECT_TRUE(postDomInfo.dominates(merge2, bb3));
+    EXPECT_TRUE(postDomInfo.dominates(merge2, bb4));
+    EXPECT_TRUE(postDomInfo.dominates(merge2, merge1));
+    EXPECT_FALSE(postDomInfo.dominates(merge2, exit));
+
+    // Test that the analysis is valid
+    EXPECT_TRUE(postDomInfo.verify());
+}
+
+TEST_F(DominanceTest, PostDominancePrintFunctions) {
+    // Test print functions for post-dominance
+    auto* func = createDiamondFunction();
+    PostDominanceInfo postDomInfo(func);
+
+    // Redirect cout to test output
+    std::stringstream buffer;
+    std::streambuf* old = std::cout.rdbuf(buffer.rdbuf());
+
+    // Test PostDominanceInfo::print()
+    postDomInfo.print();
+
+    std::string output = buffer.str();
+    EXPECT_FALSE(output.empty());
+    EXPECT_TRUE(output.find("Dominance Information") != std::string::npos);
+
+    // Test PostDominatorTree::print()
+    buffer.str("");
+    buffer.clear();
+
+    const auto* postDomTree = postDomInfo.getDominatorTree();
+    ASSERT_NE(postDomTree, nullptr);
+    postDomTree->print();
+
+    std::string treeOutput = buffer.str();
+    EXPECT_FALSE(treeOutput.empty());
+    EXPECT_TRUE(treeOutput.find("exit") != std::string::npos);
+    EXPECT_TRUE(treeOutput.find("level") != std::string::npos);
+
+    // Restore cout
+    std::cout.rdbuf(old);
+}
+
 }  // namespace

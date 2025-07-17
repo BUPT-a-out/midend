@@ -149,6 +149,28 @@ class IRBuilder {
         return inst;
     }
 
+    // Bitwise operations
+    BinaryOperator* createAnd(Value* lhs, Value* rhs,
+                              const std::string& name = "") {
+        auto* inst = BinaryOperator::Create(Opcode::And, lhs, rhs);
+        insertHelper(inst, name);
+        return inst;
+    }
+
+    BinaryOperator* createOr(Value* lhs, Value* rhs,
+                             const std::string& name = "") {
+        auto* inst = BinaryOperator::Create(Opcode::Or, lhs, rhs);
+        insertHelper(inst, name);
+        return inst;
+    }
+
+    BinaryOperator* createXor(Value* lhs, Value* rhs,
+                              const std::string& name = "") {
+        auto* inst = BinaryOperator::Create(Opcode::Xor, lhs, rhs);
+        insertHelper(inst, name);
+        return inst;
+    }
+
     // Floating point operations
     BinaryOperator* createFAdd(Value* lhs, Value* rhs,
                                const std::string& name = "") {

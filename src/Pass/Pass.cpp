@@ -66,10 +66,10 @@ bool PassManager::runPassOnModule(Pass& pass, Module& m) {
 }
 
 bool FunctionPassManager::runPassOnFunction(Pass& pass, Function& f) {
-    std::unordered_set<std::string> required, preserved;
-    pass.getAnalysisUsage(required, preserved);
+    std::unordered_set<std::string> before_required, before_preserved;
+    pass.getAnalysisUsage(before_required, before_preserved);
 
-    for (const auto& requiredAnalysis : required) {
+    for (const auto& requiredAnalysis : before_required) {
         if (analysisManager_.getAnalysis<AnalysisResult>(requiredAnalysis, f) ==
             nullptr) {
             std::cerr << "Warning: Required analysis " << requiredAnalysis
@@ -92,9 +92,11 @@ bool FunctionPassManager::runPassOnFunction(Pass& pass, Function& f) {
     }
 
     if (changed) {
+        std::unordered_set<std::string> after_required, after_preserved;
+        pass.getAnalysisUsage(after_required, after_preserved);
         auto registeredAnalyses = analysisManager_.getRegisteredAnalyses(f);
         for (const auto& analysisName : registeredAnalyses) {
-            if (preserved.find(analysisName) == preserved.end()) {
+            if (after_preserved.find(analysisName) == after_preserved.end()) {
                 analysisManager_.invalidateAnalysis(analysisName, f);
             }
         }
@@ -188,6 +190,8 @@ PassRegistry* PassRegistry::instance_ = nullptr;
 bool AnalysisManager::computeAnalysis(const std::string& name, Function& f) {
     auto it = analysisRegistry_.find(name);
     if (it == analysisRegistry_.end()) {
+        std::cerr << "Error: Analysis " << name << " not registered."
+                  << std::endl;
         return false;
     }
 

@@ -39,9 +39,11 @@ class TestAnalysisResult : public AnalysisResult {
 };
 
 // Test analysis implementation for function level
-class TestFunctionAnalysis : public AnalysisBase<TestFunctionAnalysis> {
+class TestFunctionAnalysis : public AnalysisBase {
    public:
-    TestFunctionAnalysis() : AnalysisBase("TestFunctionAnalysis") {}
+    TestFunctionAnalysis() {}
+
+    static std::string getName() { return "TestFunctionAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<TestAnalysisResult>("function_" + f.getName());
@@ -51,9 +53,9 @@ class TestFunctionAnalysis : public AnalysisBase<TestFunctionAnalysis> {
 };
 
 // Test analysis implementation for module level
-class TestModuleAnalysis : public AnalysisBase<TestModuleAnalysis> {
+class TestModuleAnalysis : public AnalysisBase {
    public:
-    TestModuleAnalysis() : AnalysisBase("TestModuleAnalysis") {}
+    TestModuleAnalysis() {}
 
     std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
         return std::make_unique<TestAnalysisResult>("module_" + m.getName());
@@ -63,9 +65,9 @@ class TestModuleAnalysis : public AnalysisBase<TestModuleAnalysis> {
 };
 
 // Test analysis that supports both function and module level
-class TestDualAnalysis : public AnalysisBase<TestDualAnalysis> {
+class TestDualAnalysis : public AnalysisBase {
    public:
-    TestDualAnalysis() : AnalysisBase("TestDualAnalysis") {}
+    TestDualAnalysis() {}
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<TestAnalysisResult>("dual_function_" +
@@ -82,9 +84,11 @@ class TestDualAnalysis : public AnalysisBase<TestDualAnalysis> {
 };
 
 // Test analysis with dependencies
-class TestDependentAnalysis : public AnalysisBase<TestDependentAnalysis> {
+class TestDependentAnalysis : public AnalysisBase {
    public:
-    TestDependentAnalysis() : AnalysisBase("TestDependentAnalysis") {}
+    TestDependentAnalysis() {}
+
+    static std::string getName() { return "TestDependentAnalysis"; }
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<TestAnalysisResult>("dependent_" + f.getName());
@@ -98,10 +102,9 @@ class TestDependentAnalysis : public AnalysisBase<TestDependentAnalysis> {
 };
 
 // Test analysis with multiple dependencies
-class TestMultiDependentAnalysis
-    : public AnalysisBase<TestMultiDependentAnalysis> {
+class TestMultiDependentAnalysis : public AnalysisBase {
    public:
-    TestMultiDependentAnalysis() : AnalysisBase("TestMultiDependentAnalysis") {}
+    TestMultiDependentAnalysis() {}
 
     std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override {
         return std::make_unique<TestAnalysisResult>("multi_dependent_" +
@@ -217,7 +220,7 @@ TEST_F(AnalysisTest, AnalysisInheritance) {
     // Test that it's properly derived from Analysis
     Analysis* basePtr = &analysis;
     EXPECT_NE(basePtr, nullptr);
-    EXPECT_EQ(basePtr->getName(), "TestFunctionAnalysis");
+    EXPECT_EQ(TestFunctionAnalysis::getName(), "TestFunctionAnalysis");
     EXPECT_TRUE(basePtr->supportsFunction());
     EXPECT_FALSE(basePtr->supportsModule());
 }
@@ -227,7 +230,7 @@ TEST_F(AnalysisTest, AnalysisPolymorphism) {
         std::make_unique<TestFunctionAnalysis>();
 
     // Test polymorphic behavior
-    EXPECT_EQ(analysis->getName(), "TestFunctionAnalysis");
+    EXPECT_EQ(TestFunctionAnalysis::getName(), "TestFunctionAnalysis");
     EXPECT_TRUE(analysis->supportsFunction());
     EXPECT_FALSE(analysis->supportsModule());
 
@@ -248,7 +251,7 @@ TEST_F(AnalysisTest, AnalysisFactoryPattern) {
 
     auto analysis = createAnalysis();
     EXPECT_NE(analysis, nullptr);
-    EXPECT_EQ(analysis->getName(), "TestFunctionAnalysis");
+    EXPECT_EQ(TestFunctionAnalysis::getName(), "TestFunctionAnalysis");
 
     auto result = analysis->runOnFunction(*function);
     EXPECT_NE(result, nullptr);
