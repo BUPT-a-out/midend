@@ -1,6 +1,7 @@
 #include "Pass/Analysis/DominanceInfo.h"
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <queue>
 #include <stack>
@@ -540,5 +541,182 @@ template class DominanceInfoBase<false>;
 template class DominanceInfoBase<true>;
 template class DominatorTreeBase<false>;
 template class DominatorTreeBase<true>;
+
+void ReverseIDFCalculator::setDefiningBlocks(
+    const std::unordered_set<BasicBlock*>& Blocks) {
+    DefiningBlocks_.clear();
+    for (auto* BB : Blocks) {
+        DefiningBlocks_.insert(BB);
+    }
+}
+
+void ReverseIDFCalculator::setLiveInBlocks(
+    const std::unordered_set<BasicBlock*>& Blocks) {
+    LiveInBlocks_.clear();
+    for (auto* BB : Blocks) {
+        LiveInBlocks_.insert(BB);
+    }
+    useLiveIn_ = true;
+}
+
+void ReverseIDFCalculator::updateDFSNumbers() {
+    DFSNumbers_.clear();
+    if (!PDT_.getFunction() || PDT_.getFunction()->empty()) {
+        return;
+    }
+
+    unsigned DFSNum = 0;
+    std::unordered_set<BasicBlock*> visited;
+
+    // Post-order DFS traversal for post-dominance using PDT's getSuccs
+    std::function<void(BasicBlock*)> dfs = [&](BasicBlock* BB) {
+        if (visited.count(BB)) return;
+        visited.insert(BB);
+        DFSNumbers_[BB] = DFSNum++;
+
+        // Visit successors first (using PDT's getSuccs for correct post-dom
+        // traversal)
+        for (auto* Succ : PDT_.getSuccs(BB)) {
+            if (!visited.count(Succ)) {
+                dfs(Succ);
+            }
+        }
+    };
+
+    // Start from post-dominance tree root (virtual exit or single exit)
+    auto* entry = PDT_.getEntry();
+    if (entry) {
+        dfs(entry);
+    }
+}
+
+void ReverseIDFCalculator::calculatePostDomLevels() {
+    PostDomLevels_.clear();
+    if (!PDT_.getFunction() || PDT_.getFunction()->empty()) {
+        return;
+    }
+
+    for (auto& BB : *PDT_.getFunction()) {
+        unsigned level = 0;
+        BasicBlock* current = BB;
+
+        while (current) {
+            BasicBlock* idom = PDT_.getImmediateDominator(current);
+            if (!idom) break;
+            level++;
+            current = idom;
+        }
+
+        PostDomLevels_[BB] = level;
+    }
+}
+
+std::vector<BasicBlock*> ReverseIDFCalculator::getPostDomSuccessors(
+    BasicBlock* BB) {
+    return PDT_.getSuccs(BB);
+}
+
+void ReverseIDFCalculator::calculate(BBVector& IDFBlocks) {
+    IDFBlocks.clear();
+
+    // Use a priority queue keyed on dominator tree level so that inserted
+    // nodes are handled from the bottom of the dominator tree upwards. We
+    // also augment the level with a DFS number to ensure that the blocks
+    // are ordered in a deterministic way.
+    using DomTreeNodePair =
+        std::pair<BasicBlock*, std::pair<unsigned, unsigned>>;
+
+    // Custom comparator for priority queue
+    auto cmp = [](const DomTreeNodePair& a, const DomTreeNodePair& b) {
+        // Compare by level first, then by DFS number
+        if (a.second.first != b.second.first) {
+            return a.second.first > b.second.first;
+        }
+        return a.second.second > b.second.second;
+    };
+
+    using IDFPriorityQueue =
+        std::priority_queue<DomTreeNodePair, std::vector<DomTreeNodePair>,
+                            decltype(cmp)>;
+
+    IDFPriorityQueue PQ(cmp);
+
+    // Update DFS numbers and post-dom levels
+    updateDFSNumbers();
+    calculatePostDomLevels();
+
+    std::vector<BasicBlock*> Worklist;
+    std::set<BasicBlock*> VisitedPQ;
+    std::set<BasicBlock*> VisitedWorklist;
+
+    // Initialize priority queue with defining blocks
+    for (BasicBlock* BB : DefiningBlocks_) {
+        unsigned level = PostDomLevels_[BB];
+        unsigned dfsNum = DFSNumbers_[BB];
+        PQ.push({BB, {level, dfsNum}});
+    }
+
+    while (!PQ.empty()) {
+        auto RootPair = PQ.top();
+        PQ.pop();
+        BasicBlock* Root = RootPair.first;
+        unsigned RootLevel = RootPair.second.first;
+
+        // Walk all dominator tree children of Root, inspecting their CFG
+        // edges with targets elsewhere on the dominator tree. Only targets
+        // whose level is at most Root's level are added to the iterated
+        // dominance frontier of the definition set.
+
+        Worklist.clear();
+        Worklist.push_back(Root);
+        VisitedWorklist.insert(Root);
+
+        while (!Worklist.empty()) {
+            BasicBlock* Node = Worklist.back();
+            Worklist.pop_back();
+
+            // DoWork lambda - processes each successor (predecessor in
+            // post-dom)
+            auto DoWork = [&](BasicBlock* Succ) {
+                // Get the post-dominance level of successor
+                unsigned SuccLevel = PostDomLevels_[Succ];
+
+                if (SuccLevel > RootLevel) return;
+
+                if (!VisitedPQ.insert(Succ).second) return;
+
+                // Check liveness constraint
+                if (useLiveIn_ && !LiveInBlocks_.count(Succ)) return;
+
+                IDFBlocks.push_back(Succ);
+
+                // Add to priority queue if not in defining blocks
+                if (!DefiningBlocks_.count(Succ)) {
+                    unsigned succDfsNum = DFSNumbers_[Succ];
+                    PQ.push({Succ, {SuccLevel, succDfsNum}});
+                }
+            };
+
+            // For post-dominance, successors are predecessors in normal CFG
+            for (auto* Succ : getPostDomSuccessors(Node)) {
+                DoWork(Succ);
+            }
+
+            // Process post-dominator tree children
+            // Use PDT's dominator tree to get children nodes
+            const auto* PDomTree = PDT_.getDominatorTree();
+            if (PDomTree) {
+                if (auto* domTreeNode = PDomTree->getNode(Node)) {
+                    for (const auto& child : domTreeNode->children) {
+                        BasicBlock* childBB = child->bb;
+                        if (VisitedWorklist.insert(childBB).second) {
+                            Worklist.push_back(childBB);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 }  // namespace midend

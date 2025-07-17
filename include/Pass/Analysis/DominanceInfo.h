@@ -182,4 +182,42 @@ using PostDominanceInfo = DominanceInfoBase<true>;
 using DominatorTree = DominatorTreeBase<false>;
 using PostDominatorTree = DominatorTreeBase<true>;
 
+class ReverseIDFCalculator {
+   public:
+    using BBVector = std::vector<BasicBlock*>;
+    using BBSet = std::set<BasicBlock*>;
+
+   private:
+    const PostDominanceInfo& PDT_;
+    BBSet DefiningBlocks_;
+    BBSet LiveInBlocks_;
+    bool useLiveIn_ = false;
+
+    // For LLVM-style implementation
+    std::unordered_map<BasicBlock*, unsigned> DFSNumbers_;
+    std::unordered_map<BasicBlock*, unsigned> PostDomLevels_;
+
+   public:
+    explicit ReverseIDFCalculator(const PostDominanceInfo& PDT) : PDT_(PDT) {}
+
+    /// Set the defining blocks - blocks that are newly live
+    void setDefiningBlocks(const std::unordered_set<BasicBlock*>& Blocks);
+
+    /// Set the live-in blocks - blocks with dead terminators
+    void setLiveInBlocks(const std::unordered_set<BasicBlock*>& Blocks);
+
+    /// Calculate the reverse iterated dominance frontier
+    void calculate(BBVector& IDFBlocks);
+
+   private:
+    /// Update DFS numbers for deterministic ordering
+    void updateDFSNumbers();
+
+    /// Calculate post-dominance tree levels
+    void calculatePostDomLevels();
+
+    /// Get CFG successors for post-dominance (predecessors in normal CFG)
+    std::vector<BasicBlock*> getPostDomSuccessors(BasicBlock* BB);
+};
+
 }  // namespace midend

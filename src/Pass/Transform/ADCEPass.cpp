@@ -179,10 +179,6 @@ void ADCEPass::initialize(Function& function) {
         }
     }
 
-    // TODO(high): mark loops as live
-
-    // TODO(low): mark non-return exit blocks as live
-
     // Treat the entry block as always live
     auto& EntryInfo = BlockInfo_[&function.front()];
     EntryInfo.Live = true;
@@ -235,20 +231,20 @@ void ADCEPass::markLiveBranchesFromControlDependences() {
     // control graph is the set of blocks upon which X is control
     // dependent. We need to find blocks that control-depend on NewLiveBlocks_
 
-    for (auto* liveBlock : NewLiveBlocks_) {
-        const auto& postDomFrontier = PDT_->getDominanceFrontier(liveBlock);
-
-        for (auto* controllingBlock : postDomFrontier) {
-            if (BlocksWithDeadTerminators_.count(controllingBlock)) {
-                markLive(controllingBlock->getTerminator());
-            }
-        }
-    }
-
+    // Use ReverseIDFCalculator for deterministic and complete calculation
+    std::vector<BasicBlock*> IDFBlocks;
+    ReverseIDFCalculator IDFs(*PDT_);
+    IDFs.setDefiningBlocks(NewLiveBlocks_);
+    IDFs.setLiveInBlocks(BlocksWithDeadTerminators_);
+    IDFs.calculate(IDFBlocks);
     NewLiveBlocks_.clear();
+
+    // Dead terminators which control live blocks are now marked live
+    for (auto* BB : IDFBlocks) {
+        markLive(BB->getTerminator());
+    }
 }
 
-// TODO: review
 void ADCEPass::updateDeadRegions(Function& function) {
     if (BlocksWithDeadTerminators_.empty()) {
         return;
