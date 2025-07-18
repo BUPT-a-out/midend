@@ -90,7 +90,7 @@ BasicBlock* DominanceInfoBase<IsPostDom>::getVirtualExit() const {
                 virtualExit_ = exitBlocks_[0];
             } else {
                 virtualExit_ = BasicBlock::Create(function_->getContext(),
-                                                  "_virtual_exit", function_);
+                                                  "_virtual_exit");
                 virtualExit_->isVirtual = true;
                 IRBuilder builder(virtualExit_);
                 builder.createRetVoid();

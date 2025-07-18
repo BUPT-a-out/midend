@@ -1166,8 +1166,6 @@ loop:
   store i32 %loop_val, i32* %ptr
   %next_i = add i32 %i, 1
   br label %loop
-_virtual_exit (virtual):
-  ret void
 }
 )");
 }
@@ -1203,8 +1201,6 @@ entry:
   br label %loop
 loop:
   br label %loop
-_virtual_exit (virtual):
-  ret void
 }
 )");
 }
@@ -1939,8 +1935,6 @@ continue:
   br label %exit
 exit:
   ret i32 0
-_virtual_exit (virtual):
-  ret void
 }
 )");
 }
@@ -2044,8 +2038,6 @@ continue:
   br i1 %loop_cond, label %loop, label %exit
 exit:
   ret i32 0
-_virtual_exit (virtual):
-  ret void
 }
 )");
 }
@@ -2133,8 +2125,6 @@ if_false:
   br label %exit
 exit:
   ret i32 100
-_virtual_exit (virtual):
-  ret void
 }
 )");
 }
