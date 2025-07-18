@@ -220,4 +220,124 @@ TEST_F(TypeTest, IntegerTypeExtended) {
     EXPECT_EQ(int8Ty, nullptr);
 }
 
+TEST_F(TypeTest, PointerTypeEquality) {
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+
+    // Test that same element type creates same pointer type
+    auto* ptr1 = PointerType::get(int32Ty);
+    auto* ptr2 = PointerType::get(int32Ty);
+    EXPECT_EQ(ptr1, ptr2);
+
+    // Test that different element types create different pointer types
+    auto* ptr3 = PointerType::get(floatTy);
+    EXPECT_NE(ptr1, ptr3);
+
+    // Test through Context method
+    auto* ptr4 = context->getPointerType(int32Ty);
+    auto* ptr5 = context->getPointerType(int32Ty);
+    EXPECT_EQ(ptr4, ptr5);
+    EXPECT_EQ(ptr1, ptr4);
+}
+
+TEST_F(TypeTest, ArrayTypeEquality) {
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+
+    // Test that same element type and size creates same array type
+    auto* arr1 = ArrayType::get(int32Ty, 10);
+    auto* arr2 = ArrayType::get(int32Ty, 10);
+    EXPECT_EQ(arr1, arr2);
+
+    // Test that different element types create different array types
+    auto* arr3 = ArrayType::get(floatTy, 10);
+    EXPECT_NE(arr1, arr3);
+
+    // Test that different sizes create different array types
+    auto* arr4 = ArrayType::get(int32Ty, 20);
+    EXPECT_NE(arr1, arr4);
+
+    // Test through Context method
+    auto* arr5 = context->getArrayType(int32Ty, 10);
+    auto* arr6 = context->getArrayType(int32Ty, 10);
+    EXPECT_EQ(arr5, arr6);
+    EXPECT_EQ(arr1, arr5);
+}
+
+TEST_F(TypeTest, ComplexTypeComparison) {
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+
+    // Test nested pointer types
+    auto* ptr1 = PointerType::get(int32Ty);
+    auto* ptrPtr1 = PointerType::get(ptr1);
+    auto* ptrPtr2 = PointerType::get(PointerType::get(int32Ty));
+    EXPECT_EQ(ptrPtr1, ptrPtr2);
+
+    // Test array of pointers
+    auto* arrPtr1 = ArrayType::get(ptr1, 5);
+    auto* arrPtr2 = ArrayType::get(PointerType::get(int32Ty), 5);
+    EXPECT_EQ(arrPtr1, arrPtr2);
+
+    // Test pointer to array
+    auto* arr1 = ArrayType::get(int32Ty, 10);
+    auto* ptrArr1 = PointerType::get(arr1);
+    auto* ptrArr2 = PointerType::get(ArrayType::get(int32Ty, 10));
+    EXPECT_EQ(ptrArr1, ptrArr2);
+
+    // Test mixed types are different
+    auto* arr2 = ArrayType::get(floatTy, 10);
+    auto* ptrArr3 = PointerType::get(arr2);
+    EXPECT_NE(ptrArr1, ptrArr3);
+}
+
+TEST_F(TypeTest, ContextTypeUniqueness) {
+    auto* int32Ty = context->getInt32Type();
+
+    // Test that Context ensures type uniqueness
+    auto* ptr1 = context->getPointerType(int32Ty);
+    auto* ptr2 = context->getPointerType(int32Ty);
+    auto* ptr3 = PointerType::get(int32Ty);
+
+    EXPECT_EQ(ptr1, ptr2);
+    EXPECT_EQ(ptr1, ptr3);
+
+    auto* arr1 = context->getArrayType(int32Ty, 15);
+    auto* arr2 = context->getArrayType(int32Ty, 15);
+    auto* arr3 = ArrayType::get(int32Ty, 15);
+
+    EXPECT_EQ(arr1, arr2);
+    EXPECT_EQ(arr1, arr3);
+
+    // Test different contexts create different types
+    auto context2 = std::make_unique<Context>();
+    auto* int32Ty2 = context2->getInt32Type();
+    auto* ptr4 = context2->getPointerType(int32Ty2);
+
+    // Different contexts should have different type instances
+    EXPECT_NE(int32Ty, int32Ty2);
+    EXPECT_NE(ptr1, ptr4);
+}
+
+TEST_F(TypeTest, TypeComparisonWithFunctionTypes) {
+    auto* int32Ty = context->getInt32Type();
+    auto* floatTy = context->getFloatType();
+
+    // Test function type comparison
+    auto* fn1 = FunctionType::get(int32Ty, {floatTy});
+    auto* fn2 = FunctionType::get(int32Ty, {floatTy});
+
+    // Function types are currently not cached, so they create new instances
+    EXPECT_NE(fn1, fn2);
+
+    // Test pointer to function types
+    auto* ptrFn1 = PointerType::get(fn1);
+    auto* ptrFn2 = PointerType::get(fn1);
+    EXPECT_EQ(ptrFn1, ptrFn2);
+
+    // Different function types create different pointer types
+    auto* ptrFn3 = PointerType::get(fn2);
+    EXPECT_NE(ptrFn1, ptrFn3);
+}
+
 }  // namespace

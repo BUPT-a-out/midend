@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -120,6 +121,8 @@ class PointerType : public Type {
     PointerType(Type *elemType, Context *ctx)
         : Type(TypeKind::Pointer, ctx), elementType_(elemType) {}
 
+    friend class Context;
+
    public:
     static PointerType *get(Type *elemType);
 
@@ -145,6 +148,8 @@ class ArrayType : public Type {
         : Type(TypeKind::Array, ctx),
           elementType_(elemType),
           numElements_(numElems) {}
+
+    friend class Context;
 
    public:
     static ArrayType *get(Type *elemType, uint64_t numElems);
@@ -212,6 +217,8 @@ class Context {
     std::unique_ptr<FloatType> floatType_;
     std::unique_ptr<LabelType> labelType_;
     std::unordered_map<unsigned, std::unique_ptr<IntegerType>> integerTypes_;
+    std::unordered_map<Type *, std::unique_ptr<PointerType>> pointerTypes_;
+    std::unordered_map<std::string, std::unique_ptr<ArrayType>> arrayTypes_;
     std::vector<std::unique_ptr<Type>> types_;
 
    public:
@@ -221,6 +228,8 @@ class Context {
     IntegerType *getIntegerType(unsigned bits);
     FloatType *getFloatType();
     LabelType *getLabelType();
+    PointerType *getPointerType(Type *elemType);
+    ArrayType *getArrayType(Type *elemType, uint64_t numElems);
 
     IntegerType *getInt1Type() { return getIntegerType(1); }
     IntegerType *getInt32Type() { return getIntegerType(32); }

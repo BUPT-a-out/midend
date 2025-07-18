@@ -17,11 +17,11 @@ VoidType* VoidType::get(Context* ctx) { return ctx->getVoidType(); }
 LabelType* LabelType::get(Context* ctx) { return ctx->getLabelType(); }
 
 PointerType* PointerType::get(Type* elemType) {
-    return new PointerType(elemType, elemType->getContext());
+    return elemType->getContext()->getPointerType(elemType);
 }
 
 ArrayType* ArrayType::get(Type* elemType, uint64_t numElems) {
-    return new ArrayType(elemType, numElems, elemType->getContext());
+    return elemType->getContext()->getArrayType(elemType, numElems);
 }
 
 FunctionType* FunctionType::get(Type* retType, std::vector<Type*> params,
@@ -67,6 +67,24 @@ IntegerType* Context::getIntegerType(unsigned bits) {
 FloatType* Context::getFloatType() { return floatType_.get(); }
 
 LabelType* Context::getLabelType() { return labelType_.get(); }
+
+PointerType* Context::getPointerType(Type* elemType) {
+    auto& type = pointerTypes_[elemType];
+    if (!type) {
+        type.reset(new PointerType(elemType, this));
+    }
+    return type.get();
+}
+
+ArrayType* Context::getArrayType(Type* elemType, uint64_t numElems) {
+    std::string key =
+        elemType->toString() + "[" + std::to_string(numElems) + "]";
+    auto& type = arrayTypes_[key];
+    if (!type) {
+        type.reset(new ArrayType(elemType, numElems, this));
+    }
+    return type.get();
+}
 
 PointerType* IntegerType::getPointerTo() { return PointerType::get(this); }
 
