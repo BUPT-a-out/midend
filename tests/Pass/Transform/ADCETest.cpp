@@ -457,7 +457,6 @@ TEST_F(ADCETest, NoDeadCode) {
 
     std::string beforeIR = IRPrinter().print(func);
 
-    std::cout << IRPrinter().print(func) << std::endl;
     EXPECT_EQ(beforeIR, R"(define i32 @test_func(i32 %a, i32 %b) {
 entry:
   %add = add i32 %a, %b

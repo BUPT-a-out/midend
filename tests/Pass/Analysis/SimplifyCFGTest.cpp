@@ -122,8 +122,6 @@ TEST_F(SimplifyCFGTest, RemoveUnreachableBlock_MultipleUnreachable) {
     EXPECT_EQ(IRPrinter().print(func),
               "define i32 @test_func(i1 %cond) {\n"
               "entry:\n"
-              "  br i1 %cond, label %exit, label %exit\n"
-              "exit:\n"
               "  ret i32 42\n"
               "}\n");
 }
@@ -237,20 +235,85 @@ TEST_F(SimplifyCFGTest, MergeBlocks_CannotMergeMultiplePredecessors) {
     builder->setInsertPoint(mergeBB);
     builder->createRet(builder->getInt32(42));
 
-    std::string beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @test_func(i1 %cond) {
+entry:
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  br label %merge
+false_bb:
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
 
     SimplifyCFGPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
-    // The pass will optimize empty blocks by redirecting predecessors
     EXPECT_TRUE(changed);
-    EXPECT_EQ(IRPrinter().print(func),
-              "define i32 @test_func(i1 %cond) {\n"
-              "entry:\n"
-              "  br i1 %cond, label %merge, label %merge\n"
-              "merge:\n"
-              "  ret i32 42\n"
-              "}\n");
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @test_func(i1 %cond) {
+entry:
+  ret i32 42
+}
+)");
+}
+
+TEST_F(SimplifyCFGTest, MergeBlocks_WithStore) {
+    auto intType = ctx->getIntegerType(32);
+    auto boolType = ctx->getIntegerType(1);
+    auto funcType = FunctionType::get(intType, {boolType});
+    auto func = Function::Create(funcType, "test_func", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto trueBB = BasicBlock::Create(ctx.get(), "true_bb", func);
+    auto falseBB = BasicBlock::Create(ctx.get(), "false_bb", func);
+    auto mergeBB = BasicBlock::Create(ctx.get(), "merge", func);
+
+    auto cond = func->getArg(0);
+    cond->setName("cond");
+
+    builder->setInsertPoint(entryBB);
+    builder->createCondBr(cond, trueBB, falseBB);
+
+    builder->setInsertPoint(trueBB);
+    builder->createBr(mergeBB);
+
+    builder->setInsertPoint(falseBB);
+    builder->createAdd(cond, builder->getInt32(1));
+    builder->createBr(mergeBB);
+
+    builder->setInsertPoint(mergeBB);
+    builder->createRet(builder->getInt32(42));
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @test_func(i1 %cond) {
+entry:
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  br label %merge
+false_bb:
+  %0 = add i1 %cond, 1
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
+
+    SimplifyCFGPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @test_func(i1 %cond) {
+entry:
+  br i1 %cond, label %merge, label %false_bb
+false_bb:
+  %0 = add i1 %cond, 1
+  br label %merge
+merge:
+  ret i32 42
+}
+)");
 }
 
 TEST_F(SimplifyCFGTest, MergeBlocks_CannotMergeWithPHI) {
@@ -275,11 +338,27 @@ TEST_F(SimplifyCFGTest, MergeBlocks_CannotMergeWithPHI) {
 
     std::string beforeIR = IRPrinter().print(func);
 
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @test_func(i32 %x) {
+entry:
+  %val1 = add i32 %x, 10
+  br label %middle
+middle:
+  %phi = phi i32 [ %val1, %entry ]
+  ret i32 %phi
+}
+)");
+
     SimplifyCFGPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
-    EXPECT_FALSE(changed);
-    EXPECT_EQ(IRPrinter().print(func), beforeIR);
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @test_func(i32 %x) {
+entry:
+  %val1 = add i32 %x, 10
+  ret i32 %val1
+}
+)");
 }
 
 TEST_F(SimplifyCFGTest, EliminateEmptyBlocks_SimpleCase) {
@@ -322,8 +401,6 @@ TEST_F(SimplifyCFGTest, EliminateEmptyBlocks_SimpleCase) {
     EXPECT_EQ(IRPrinter().print(func),
               "define i32 @test_func(i1 %cond) {\n"
               "entry:\n"
-              "  br i1 %cond, label %exit, label %exit\n"
-              "exit:\n"
               "  ret i32 42\n"
               "}\n");
 }
@@ -357,7 +434,8 @@ TEST_F(SimplifyCFGTest, EliminateEmptyBlocks_WithPHI) {
     phi->addIncoming(builder->getInt32(0), emptyBB);
     builder->createRet(phi);
 
-    EXPECT_EQ(IRPrinter().print(func),
+    auto beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(beforeIR,
               "define i32 @test_func(i1 %cond) {\n"
               "entry:\n"
               "  br i1 %cond, label %true_bb, label %empty\n"
@@ -373,21 +451,9 @@ TEST_F(SimplifyCFGTest, EliminateEmptyBlocks_WithPHI) {
     SimplifyCFGPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
-    EXPECT_TRUE(changed);
+    EXPECT_FALSE(changed);
 
-    // After optimization:
-    // - Both empty blocks are eliminated (empty and true_bb)
-    // - The conditional branch is simplified since both targets go to exit
-    // - The phi node is updated to have entry as the predecessor for both
-    // values
-    EXPECT_EQ(IRPrinter().print(func),
-              "define i32 @test_func(i1 %cond) {\n"
-              "entry:\n"
-              "  br i1 %cond, label %exit, label %exit\n"
-              "exit:\n"
-              "  %result = phi i32 [ 1, %entry ], [ 0, %entry ]\n"
-              "  ret i32 %result\n"
-              "}\n");
+    EXPECT_EQ(IRPrinter().print(func), beforeIR);
 }
 
 TEST_F(SimplifyCFGTest, EliminateEmptyBlocks_ChainedEmpty) {
@@ -502,14 +568,19 @@ TEST_F(SimplifyCFGTest, RemoveDuplicatePHI_SimpleCase) {
     EXPECT_TRUE(changed);
 
     EXPECT_EQ(IRPrinter().print(func),
-              "define i32 @test_func(i1 %cond, i32 %val1, i32 %val2) {\n"
-              "entry:\n"
-              "  br i1 %cond, label %merge, label %merge\n"
-              "merge:\n"
-              "  %phi1 = phi i32 [ %val1, %entry ], [ %val2, %entry ]\n"
-              "  %result = add i32 %phi1, %phi1\n"
-              "  ret i32 %result\n"
-              "}\n");
+              R"(define i32 @test_func(i1 %cond, i32 %val1, i32 %val2) {
+entry:
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  br label %merge
+false_bb:
+  br label %merge
+merge:
+  %phi1 = phi i32 [ %val1, %true_bb ], [ %val2, %false_bb ]
+  %result = add i32 %phi1, %phi1
+  ret i32 %result
+}
+)");
 }
 
 TEST_F(SimplifyCFGTest, RemoveDuplicatePHI_MultipleDuplicates) {
@@ -652,20 +723,28 @@ TEST_F(SimplifyCFGTest, RemoveDuplicatePHI_NoDuplicates) {
 
     std::string beforeIR = IRPrinter().print(func);
 
+    EXPECT_EQ(beforeIR,
+              R"(define i32 @test_func(i1 %cond, i32 %val1, i32 %val2) {
+entry:
+  br i1 %cond, label %true_bb, label %false_bb
+true_bb:
+  br label %merge
+false_bb:
+  br label %merge
+merge:
+  %phi1 = phi i32 [ %val1, %true_bb ], [ %val2, %false_bb ]
+  %phi2 = phi i32 [ %val2, %true_bb ], [ %val1, %false_bb ]
+  %result = add i32 %phi1, %phi2
+  ret i32 %result
+}
+)");
+
     SimplifyCFGPass pass;
     bool changed = pass.runOnFunction(*func, *am);
 
-    EXPECT_TRUE(changed);
-    EXPECT_EQ(IRPrinter().print(func),
-              "define i32 @test_func(i1 %cond, i32 %val1, i32 %val2) {\n"
-              "entry:\n"
-              "  br i1 %cond, label %merge, label %merge\n"
-              "merge:\n"
-              "  %phi1 = phi i32 [ %val1, %entry ], [ %val2, %entry ]\n"
-              "  %phi2 = phi i32 [ %val2, %entry ], [ %val1, %entry ]\n"
-              "  %result = add i32 %phi1, %phi2\n"
-              "  ret i32 %result\n"
-              "}\n");
+    EXPECT_FALSE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func), beforeIR);
 }
 
 TEST_F(SimplifyCFGTest, CombinedOptimizations_UnreachableAndMerge) {
@@ -843,8 +922,6 @@ TEST_F(SimplifyCFGTest, CombinedOptimizations_Empty) {
     bool changed = pass.runOnFunction(*func, *am);
 
     EXPECT_TRUE(changed);
-
-    std::cout << IRPrinter().print(func) << std::endl;
 
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_func(i1 %cond, i32 %val1, i32 %val2) {

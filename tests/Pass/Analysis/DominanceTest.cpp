@@ -410,22 +410,6 @@ TEST_F(DominanceTest, ComplexCFG) {
     builder.setInsertPoint(exit);
     builder.createRet(phi2);
 
-    // Debug: Check CFG connectivity
-    std::cout << "CFG Debug:\n";
-    for (auto& BB : *func) {
-        std::cout << BB->getName() << " preds: ";
-        auto preds = BB->getPredecessors();
-        for (auto* pred : preds) {
-            std::cout << pred->getName() << " ";
-        }
-        std::cout << "| succs: ";
-        auto succs = BB->getSuccessors();
-        for (auto* succ : succs) {
-            std::cout << succ->getName() << " ";
-        }
-        std::cout << "\n";
-    }
-
     DominanceInfo domInfo(func);
     EXPECT_TRUE(domInfo.verify());
 

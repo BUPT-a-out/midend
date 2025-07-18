@@ -26,13 +26,9 @@ bool SimplifyCFGPass::runOnFunction(Function& function, AnalysisManager&) {
     bool iterChanged = true;
 
     while (iterChanged) {
-        std::cout << "1\n" << IRPrinter().print(&function) << std::endl;
         iterChanged = removeUnreachableBlocks(function);
-        std::cout << "2\n" << IRPrinter().print(&function) << std::endl;
         iterChanged |= mergeBlocks(function);
-        std::cout << "3\n" << IRPrinter().print(&function) << std::endl;
         iterChanged |= eliminateEmptyBlocks(function);
-        std::cout << "4\n" << IRPrinter().print(&function) << std::endl;
         iterChanged |= removeDuplicatePHINodes(function);
         overallChanged |= iterChanged;
     }
@@ -124,12 +120,6 @@ bool SimplifyCFGPass::canMergeWithPredecessor(BasicBlock* block) {
 
     // Predecessor must have exactly one successor
     if (predSuccessors.size() != 1) {
-        std::cout << "Checking if block " << block->getName()
-                  << " predSuccessors.size() = " << predSuccessors.size()
-                  << std::endl;
-        for (auto* succ : predSuccessors) {
-            std::cout << "  Successor: " << succ->getName() << std::endl;
-        }
         return false;
     }
 
