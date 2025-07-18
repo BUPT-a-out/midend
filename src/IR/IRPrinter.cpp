@@ -356,7 +356,7 @@ void IRPrinter::printInstruction(const Instruction* inst) {
             }
             break;
         case Opcode::Br:
-            if (cast<BranchInst>(inst)->isUnconditional()) {
+            if (auto br = dyn_cast<BranchInst>(inst); br->isUnconditional()) {
                 result += "br label %" + inst->getOperand(0)->getName();
             } else {
                 result += "br i1 " + getValueName(inst->getOperand(0)) + ", ";

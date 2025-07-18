@@ -87,6 +87,9 @@ class Value {
 
     void replaceAllUsesWith(Value* newValue);
 
+    template <typename Lambda>
+    void replaceAllUsesBy(Lambda&& lambda);
+
     Context* getContext() const;
 
     virtual std::string toString() const;
@@ -196,5 +199,15 @@ class User : public Value {
         return v->getValueKind() >= ValueKind::User;
     }
 };
+
+template <typename Lambda>
+void Value::replaceAllUsesBy(Lambda&& lambda) {
+    Use* current = useListHead_;
+    while (current) {
+        Use* next = current->next_;
+        lambda(current);
+        current = next;
+    }
+}
 
 }  // namespace midend

@@ -46,12 +46,13 @@ inline bool isa(const From& val) {
 
 template <typename To, typename From>
 inline To* dyn_cast(From* val) {
-    return isa<To>(*val) ? static_cast<To*>(val) : nullptr;
+    return val ? (isa<To>(*val) ? static_cast<To*>(val) : nullptr) : nullptr;
 }
 
 template <typename To, typename From>
 inline const To* dyn_cast(const From* val) {
-    return isa<To>(*val) ? static_cast<const To*>(val) : nullptr;
+    return val ? (isa<To>(*val) ? static_cast<const To*>(val) : nullptr)
+               : nullptr;
 }
 
 template <typename To, typename From>

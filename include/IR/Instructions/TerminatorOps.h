@@ -1,5 +1,6 @@
 #pragma once
 
+#include "IR/Constant.h"
 #include "IR/Instruction.h"
 #include "IR/Type.h"
 
@@ -47,6 +48,15 @@ class BranchInst : public Instruction {
                               BasicBlock* falseDest,
                               BasicBlock* parent = nullptr);
 
+    bool isConstantUnconditional() const {
+        return getNumOperands() == 3 && isa<ConstantInt>(getOperand(0));
+    }
+
+    bool isSameTarget() const {
+        if (getNumOperands() < 2) return false;
+        return getOperand(1) == getOperand(2);
+    }
+
     bool isUnconditional() const { return getNumOperands() == 1; }
     bool isConditional() const { return getNumOperands() == 3; }
 
@@ -78,7 +88,12 @@ class BranchInst : public Instruction {
     }
 
     BasicBlock* getTargetBB() const {
-        return isUnconditional() ? getSuccessor(0) : nullptr;
+        if (isConstantUnconditional()) {
+            return dyn_cast<ConstantInt>(getOperand(0))->isZero() ? getFalseBB()
+                                                                  : getTrueBB();
+        }
+        if (getNumOperands() == 1 || isSameTarget()) return getSuccessor(0);
+        return nullptr;
     }
 
     void setOperand(unsigned i, Value* v);
@@ -117,6 +132,16 @@ class PHINode : public Instruction {
             return reinterpret_cast<BasicBlock*>(val);
         }
         return nullptr;
+    }
+
+    bool isTrival() {
+        if (getNumIncomingValues() <= 1) return true;
+        for (unsigned i = 1; i < getNumIncomingValues(); ++i) {
+            if (getIncomingBlock(i) != getIncomingBlock(0)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     int getBasicBlockIndex(const BasicBlock* bb) const;
