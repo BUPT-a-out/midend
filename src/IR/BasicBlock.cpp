@@ -1,6 +1,7 @@
 #include "IR/BasicBlock.h"
 
 #include <set>
+#include <unordered_set>
 
 #include "IR/Function.h"
 #include "IR/Instructions/TerminatorOps.h"
@@ -151,22 +152,22 @@ std::vector<BasicBlock*> BasicBlock::getPredecessors() const {
 }
 
 std::vector<BasicBlock*> BasicBlock::getSuccessors() const {
-    std::set<BasicBlock*> successors;
+    std::vector<BasicBlock*> successors;
+    std::unordered_set<BasicBlock*> successors_set;
 
     auto* terminator = getTerminator();
-    if (!terminator)
-        return std::vector<BasicBlock*>(successors.begin(), successors.end());
+    if (!terminator) return successors;
 
     if (auto* br = dyn_cast<BranchInst>(terminator)) {
         for (unsigned i = 0; i < br->getNumSuccessors(); ++i) {
             auto* succ = br->getSuccessor(i);
-            if (succ) {
-                successors.insert(succ);
+            if (succ && successors_set.insert(succ).second) {
+                successors.push_back(succ);
             }
         }
     }
 
-    return std::vector<BasicBlock*>(successors.begin(), successors.end());
+    return successors;
 }
 
 void BasicBlock::invalidatePredecessorCache() const {
