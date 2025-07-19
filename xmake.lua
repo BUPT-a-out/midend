@@ -89,6 +89,7 @@ task("test")
         description = "Run midend tests",
         options = {
             {'r', "repeat", "kv", "10", "Run the tests repeatedly; use a negative count to repeat forever."},
+            {'f', "filter", "kv", nil, "GTest filter pattern (e.g., 'Mem2RegTest.*')"}
         }
     }
     on_run(function ()
@@ -106,6 +107,11 @@ task("test")
         local target = project.target("midend_tests")
         local target_executable = path.absolute(target:targetfile())
         local repeat_count = option.get("repeat") or 10
+        local args = ""
+        local filter = option.get("filter")
+        if filter then
+            args = " --gtest_filter=" .. filter .. " "
+        end
 
         local gtest_parallel = path.join(target:targetdir(), "scripts", "gtest_parallel.py")
         if not os.isfile(gtest_parallel) then
@@ -114,10 +120,10 @@ task("test")
         end
         if tonumber(repeat_count) < 0 then
             while true do
-                os.exec(python3.program .. " " .. gtest_parallel .. " -r 5 " .. target_executable)
+                os.exec(python3.program .. " " .. gtest_parallel .. args .. " -r 5 " .. target_executable)
             end
         else
-            os.exec(python3.program .. " " .. gtest_parallel .. " -r " .. repeat_count .. " " .. target_executable)
+            os.exec(python3.program .. " " .. gtest_parallel .. args .. " -r " .. repeat_count .. " " .. target_executable)
         end
     end)
 
