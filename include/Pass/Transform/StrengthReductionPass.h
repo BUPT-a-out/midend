@@ -41,7 +41,7 @@ class StrengthReductionPass : public FunctionPass {
     unsigned countBits(uint64_t value);
     Value* createMulReplacement(Value* operand, const MulDecomposition& decomp,
                                 Instruction* insertBefore);
-    
+
     struct DivMagicNumbers {
         uint64_t magic;
         unsigned preShift;
@@ -51,8 +51,8 @@ class StrengthReductionPass : public FunctionPass {
 
     DivMagicNumbers computeUnsignedDivMagic(uint64_t divisor);
     DivMagicNumbers computeSignedDivMagic(int64_t divisor);
-    Value* createDivReplacement(Value* dividend, int64_t divisor,
-                                bool isSigned, Instruction* insertBefore);
+    Value* createDivReplacement(Value* dividend, int64_t divisor, bool isSigned,
+                                Instruction* insertBefore);
 };
 
 }  // namespace midend
