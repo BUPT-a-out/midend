@@ -46,6 +46,8 @@ bool StrengthReductionPass::processInstruction(Instruction* inst) {
                 return optimizeMultiplication(binaryOp);
             case Opcode::Div:
                 return optimizeDivision(binaryOp);
+            case Opcode::Rem:
+                return optimizeModulo(binaryOp);
             default:
                 break;
         }
@@ -305,6 +307,40 @@ Value* StrengthReductionPass::createDivReplacement(Value* dividend,
         }
     }
     return nullptr;
+}
+
+bool StrengthReductionPass::optimizeModulo(BinaryOperator* remInst) {
+    Value* dividend = remInst->getOperand(0);
+    Value* divisor = remInst->getOperand(1);
+
+    auto* constant = dyn_cast<ConstantInt>(divisor);
+    if (!constant) {
+        return false;
+    }
+
+    int64_t divisorValue = static_cast<int64_t>(constant->getValue());
+
+    if (divisorValue == 0) {
+        return false;
+    }
+
+    uint64_t absDivisor = static_cast<uint64_t>(std::abs(divisorValue));
+
+    if ((absDivisor & (absDivisor - 1)) != 0) {
+        return false;
+    }
+
+    IRBuilder builder(remInst->getParent());
+    builder.setInsertPoint(remInst);
+
+    auto* maskValue = ConstantInt::get(
+        dyn_cast<IntegerType>(remInst->getType()), absDivisor - 1);
+    Value* replacement = builder.createAnd(dividend, maskValue);
+
+    remInst->replaceAllUsesWith(replacement);
+    remInst->eraseFromParent();
+    changed = true;
+    return true;
 }
 
 REGISTER_PASS(StrengthReductionPass, "strength-reduction")

@@ -31,6 +31,7 @@ class StrengthReductionPass : public FunctionPass {
     bool processInstruction(Instruction* inst);
     bool optimizeMultiplication(BinaryOperator* mulInst);
     bool optimizeDivision(BinaryOperator* divInst);
+    bool optimizeModulo(BinaryOperator* remInst);
 
     struct MulDecomposition {
         std::vector<std::pair<unsigned, bool>> operations;

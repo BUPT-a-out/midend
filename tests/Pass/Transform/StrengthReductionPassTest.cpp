@@ -700,3 +700,110 @@ entry:
 
     EXPECT_EQ(IRPrinter().print(func), beforeIR);
 }
+
+TEST_F(StrengthReductionPassTest, ModuloByPowerOfTwo) {
+    auto* i32Type = IntegerType::get(ctx.get(), 32);
+    auto* funcType = FunctionType::get(i32Type, {i32Type});
+    auto* func = Function::Create(funcType, "test_mod_power2", module.get());
+
+    auto* entry = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entry);
+
+    auto* param = func->getArg(0);
+    auto* eight = ConstantInt::get(i32Type, 8);
+    auto* rem = builder->createRem(param, eight);
+    builder->createRet(rem);
+
+    // Before pass - expect original modulo
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_mod_power2(i32 %arg0) {
+entry:
+  %0 = srem i32 %arg0, 8
+  ret i32 %0
+}
+)");
+
+    StrengthReductionPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    // After pass - expect bitwise AND optimization
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_mod_power2(i32 %arg0) {
+entry:
+  %0 = and i32 %arg0, 7
+  ret i32 %0
+}
+)");
+}
+
+TEST_F(StrengthReductionPassTest, ModuloByNonPowerOfTwo) {
+    auto* i32Type = IntegerType::get(ctx.get(), 32);
+    auto* funcType = FunctionType::get(i32Type, {i32Type});
+    auto* func =
+        Function::Create(funcType, "test_mod_non_power2", module.get());
+
+    auto* entry = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entry);
+
+    auto* param = func->getArg(0);
+    auto* seven = ConstantInt::get(i32Type, 7);
+    auto* rem = builder->createRem(param, seven);
+    builder->createRet(rem);
+
+    auto beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(beforeIR,
+              R"(define i32 @test_mod_non_power2(i32 %arg0) {
+entry:
+  %0 = srem i32 %arg0, 7
+  ret i32 %0
+}
+)");
+
+    StrengthReductionPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_FALSE(changed);
+
+    // After pass - expect no optimization for non-power-of-2
+    EXPECT_EQ(IRPrinter().print(func), beforeIR);
+}
+
+TEST_F(StrengthReductionPassTest, ModuloByNegativePowerOfTwo) {
+    auto* i32Type = IntegerType::get(ctx.get(), 32);
+    auto* funcType = FunctionType::get(i32Type, {i32Type});
+    auto* func =
+        Function::Create(funcType, "test_mod_neg_power2", module.get());
+
+    auto* entry = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entry);
+
+    auto* param = func->getArg(0);
+    auto* negEight = ConstantInt::get(i32Type, -8);
+    auto* rem = builder->createRem(param, negEight);
+    builder->createRet(rem);
+
+    // Before pass - expect original modulo
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_mod_neg_power2(i32 %arg0) {
+entry:
+  %0 = srem i32 %arg0, -8
+  ret i32 %0
+}
+)");
+
+    StrengthReductionPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    // After pass - expect bitwise AND optimization (same as positive case)
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_mod_neg_power2(i32 %arg0) {
+entry:
+  %0 = and i32 %arg0, 7
+  ret i32 %0
+}
+)");
+}
