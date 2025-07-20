@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <memory>
 #include <stack>
 #include <unordered_map>
@@ -43,6 +42,185 @@ class CallGraphNode {
     bool isRoot() const { return callers_.empty(); }
 };
 
+// Forward declarations
+class SuperGraph;
+class CallGraph;
+
+/// SuperNode represents a strongly connected component in the super graph
+class SuperNode {
+   private:
+    size_t sccIndex_;
+    std::unordered_set<Function*> functions_;
+    std::unordered_set<SuperNode*> successors_;
+    std::unordered_set<SuperNode*> predecessors_;
+    const CallGraph* callGraph_;
+
+   public:
+    explicit SuperNode(size_t sccIndex, const CallGraph* cg = nullptr)
+        : sccIndex_(sccIndex), callGraph_(cg) {}
+
+    void setCallGraph(const CallGraph* cg) { callGraph_ = cg; }
+
+    /// Get the SCC index this super node represents
+    size_t getSCCIndex() const { return sccIndex_; }
+
+    /// Add a function to this super node
+    void addFunction(Function* F) { functions_.insert(F); }
+
+    /// Get all functions in this super node
+    const std::unordered_set<Function*>& getFunctions() const {
+        return functions_;
+    }
+
+    /// Check if this super node contains a specific function
+    bool containsFunction(Function* F) const { return functions_.count(F) > 0; }
+
+    /// Add a successor super node
+    void addSuccessor(SuperNode* successor) {
+        if (successor && successor != this) {
+            successors_.insert(successor);
+            successor->predecessors_.insert(this);
+        }
+    }
+
+    /// Get successor super nodes
+    const std::unordered_set<SuperNode*>& getSuccessors() const {
+        return successors_;
+    }
+
+    /// Get predecessor super nodes
+    const std::unordered_set<SuperNode*>& getPredecessors() const {
+        return predecessors_;
+    }
+
+    /// Check if this is a leaf node (no successors)
+    bool isLeaf() const { return successors_.empty(); }
+
+    /// Check if this is a root node (no predecessors)
+    bool isRoot() const { return predecessors_.empty(); }
+
+    /// Get the number of functions in this super node
+    size_t size() const { return functions_.size(); }
+
+    /// Check if this super node represents a single function SCC
+    bool isTrivial() const { return functions_.size() == 1; }
+
+    /// Check if this super node represents a true SCC (recursive)
+    /// This includes both multi-function SCCs and self-recursive functions
+    bool isSCC() const;
+};
+
+/// SuperGraph represents the DAG of strongly connected components
+class SuperGraph {
+   private:
+    std::vector<std::unique_ptr<SuperNode>> superNodes_;
+    std::unordered_map<size_t, SuperNode*> sccIndexToSuperNode_;
+    std::unordered_map<Function*, SuperNode*> functionToSuperNode_;
+    mutable std::vector<SuperNode*> reverseTopologicalOrder_;
+    mutable bool reverseTopologicalOrderCached_;
+
+    /// Get reverse topological order (bottom-up, leaves first)
+    const std::vector<SuperNode*>& getReverseTopologicalOrder() const;
+
+   public:
+    SuperGraph() : reverseTopologicalOrderCached_(false) {}
+    /// Iterator for bottom-up traversal (reverse topological order)
+    class ReverseTopologicalIterator {
+       private:
+        std::vector<SuperNode*>::const_iterator it_;
+
+       public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = SuperNode*;
+        using difference_type = std::ptrdiff_t;
+        using pointer = SuperNode**;
+        using reference = SuperNode*&;
+
+        explicit ReverseTopologicalIterator(
+            std::vector<SuperNode*>::const_iterator it)
+            : it_(it) {}
+
+        SuperNode* operator*() const { return *it_; }
+        SuperNode* operator->() const { return *it_; }
+
+        ReverseTopologicalIterator& operator++() {
+            ++it_;
+            return *this;
+        }
+
+        ReverseTopologicalIterator operator++(int) {
+            ReverseTopologicalIterator tmp = *this;
+            ++it_;
+            return tmp;
+        }
+
+        bool operator==(const ReverseTopologicalIterator& other) const {
+            return it_ == other.it_;
+        }
+
+        bool operator!=(const ReverseTopologicalIterator& other) const {
+            return it_ != other.it_;
+        }
+    };
+
+    using iterator = ReverseTopologicalIterator;
+    using const_iterator = ReverseTopologicalIterator;
+
+    /// Iterators for super nodes (bottom-up, reverse topological order)
+    iterator begin() {
+        const auto& order = getReverseTopologicalOrder();
+        return iterator(order.begin());
+    }
+
+    iterator end() {
+        const auto& order = getReverseTopologicalOrder();
+        return iterator(order.end());
+    }
+
+    const_iterator begin() const {
+        const auto& order = getReverseTopologicalOrder();
+        return const_iterator(order.begin());
+    }
+
+    const_iterator end() const {
+        const auto& order = getReverseTopologicalOrder();
+        return const_iterator(order.end());
+    }
+
+    /// Get the number of super nodes
+    size_t size() const { return superNodes_.size(); }
+    bool empty() const { return superNodes_.empty(); }
+
+    /// Add a super node
+    SuperNode* addSuperNode(size_t sccIndex, const CallGraph* cg = nullptr) {
+        auto superNode = std::make_unique<SuperNode>(sccIndex, cg);
+        SuperNode* ptr = superNode.get();
+        superNodes_.push_back(std::move(superNode));
+        sccIndexToSuperNode_[sccIndex] = ptr;
+        return ptr;
+    }
+
+    /// Get super node by SCC index
+    SuperNode* getSuperNode(size_t sccIndex) const {
+        auto it = sccIndexToSuperNode_.find(sccIndex);
+        return it != sccIndexToSuperNode_.end() ? it->second : nullptr;
+    }
+
+    /// Get super node containing a specific function
+    SuperNode* getSuperNode(Function* F) const {
+        auto it = functionToSuperNode_.find(F);
+        return it != functionToSuperNode_.end() ? it->second : nullptr;
+    }
+
+    /// Map a function to its super node
+    void mapFunction(Function* F, SuperNode* superNode) {
+        functionToSuperNode_[F] = superNode;
+    }
+
+    /// Print super graph for debugging
+    void print() const;
+};
+
 class CallGraph : public AnalysisResult {
    public:
     using NodeMap =
@@ -55,6 +233,7 @@ class CallGraph : public AnalysisResult {
     SCCVector sccs_;
     std::unordered_map<Function*, size_t> functionToSCC_;
     std::unordered_map<Function*, bool> sideEffectCache_;
+    mutable std::unique_ptr<SuperGraph> superGraph_;
 
     // Tarjan's algorithm state
     struct TarjanState {
@@ -71,6 +250,7 @@ class CallGraph : public AnalysisResult {
     void analyzeSideEffects();
     bool hasSideEffectsInternal(Function* F,
                                 std::unordered_set<Function*>& visited);
+    void buildSuperGraph() const;
 
    public:
     explicit CallGraph(Module* M);
@@ -197,6 +377,20 @@ class CallGraph : public AnalysisResult {
     /// Get iterator for downstream call chain of a function
     CallChainIterator getDownstreamIterator(Function* F) const {
         return CallChainIterator(F, *this);
+    }
+
+    /// Get the super graph (SCC condensation graph)
+    const SuperGraph& getSuperGraph() const {
+        if (!superGraph_) {
+            buildSuperGraph();
+        }
+        return *superGraph_;
+    }
+
+    /// Get the super node containing a specific function
+    SuperNode* getSuperNode(Function* F) const {
+        const SuperGraph& sg = getSuperGraph();
+        return sg.getSuperNode(F);
     }
 
     /// Print call graph for debugging

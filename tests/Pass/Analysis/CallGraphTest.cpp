@@ -921,4 +921,288 @@ TEST_F(CallGraphTest, TreeWithBackEdges) {
     EXPECT_FALSE(cg.isInSCC(builder.getFunction(12)));
 }
 
+// Test SuperGraph functionality
+TEST_F(CallGraphTest, SuperGraphBasic) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(4);
+
+    // Create two SCCs: 0 <-> 1 and 2 <-> 3
+    builder.addCall(0, 1);
+    builder.addCall(1, 0);
+    builder.addCall(2, 3);
+    builder.addCall(3, 2);
+
+    // Connect SCCs: SCC1 -> SCC2
+    builder.addCall(1, 2);
+
+    CallGraph cg(builder.getModule());
+    const SuperGraph& sg = cg.getSuperGraph();
+
+    // Should have 2 super nodes
+    EXPECT_EQ(sg.size(), 2);
+
+    // Get super nodes
+    SuperNode* sn0 = cg.getSuperNode(builder.getFunction(0));
+    SuperNode* sn1 = cg.getSuperNode(builder.getFunction(1));
+    SuperNode* sn2 = cg.getSuperNode(builder.getFunction(2));
+    SuperNode* sn3 = cg.getSuperNode(builder.getFunction(3));
+
+    // Functions 0 and 1 should be in the same super node
+    EXPECT_EQ(sn0, sn1);
+    EXPECT_EQ(sn2, sn3);
+    EXPECT_NE(sn0, sn2);
+
+    // Check super node contents
+    EXPECT_EQ(sn0->size(), 2);
+    EXPECT_EQ(sn2->size(), 2);
+    EXPECT_TRUE(sn0->containsFunction(builder.getFunction(0)));
+    EXPECT_TRUE(sn0->containsFunction(builder.getFunction(1)));
+    EXPECT_TRUE(sn2->containsFunction(builder.getFunction(2)));
+    EXPECT_TRUE(sn2->containsFunction(builder.getFunction(3)));
+
+    // Check SCC property
+    EXPECT_TRUE(sn0->isSCC());
+    EXPECT_TRUE(sn2->isSCC());
+
+    // Check connectivity
+    EXPECT_TRUE(sn0->getSuccessors().count(sn2) > 0);
+    EXPECT_TRUE(sn2->getPredecessors().count(sn0) > 0);
+    EXPECT_EQ(sn0->getSuccessors().size(), 1);
+    EXPECT_EQ(sn2->getPredecessors().size(), 1);
+    EXPECT_EQ(sn0->getPredecessors().size(), 0);
+    EXPECT_EQ(sn2->getSuccessors().size(), 0);
+}
+
+// Test SuperGraph with self-recursive function
+TEST_F(CallGraphTest, SuperGraphSelfRecursive) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(3);
+
+    // Function 0 is self-recursive
+    builder.addCall(0, 0);
+
+    // Functions 1 and 2 are connected but not recursive
+    builder.addCall(1, 2);
+
+    CallGraph cg(builder.getModule());
+    const SuperGraph& sg = cg.getSuperGraph();
+
+    // Should have 3 super nodes (self-recursive counts as SCC)
+    EXPECT_EQ(sg.size(), 3);
+
+    SuperNode* sn0 = cg.getSuperNode(builder.getFunction(0));
+    SuperNode* sn1 = cg.getSuperNode(builder.getFunction(1));
+    SuperNode* sn2 = cg.getSuperNode(builder.getFunction(2));
+
+    // All should be in different super nodes
+    EXPECT_NE(sn0, sn1);
+    EXPECT_NE(sn1, sn2);
+    EXPECT_NE(sn0, sn2);
+
+    // Check sizes
+    EXPECT_EQ(sn0->size(), 1);
+    EXPECT_EQ(sn1->size(), 1);
+    EXPECT_EQ(sn2->size(), 1);
+
+    // Check SCC property
+    EXPECT_TRUE(sn0->isSCC());   // Self-recursive
+    EXPECT_FALSE(sn1->isSCC());  // Not recursive
+    EXPECT_FALSE(sn2->isSCC());  // Not recursive
+
+    // Check trivial property
+    EXPECT_TRUE(sn0->isTrivial());
+    EXPECT_TRUE(sn1->isTrivial());
+    EXPECT_TRUE(sn2->isTrivial());
+}
+
+// Test SuperGraph reverse topological ordering
+TEST_F(CallGraphTest, SuperGraphReverseTopologicalOrder) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(6);
+
+    // Create SCCs: {0,1}, {2,3}, {4,5}
+    builder.addCall(0, 1);
+    builder.addCall(1, 0);
+    builder.addCall(2, 3);
+    builder.addCall(3, 2);
+    builder.addCall(4, 5);
+    builder.addCall(5, 4);
+
+    // Connect in order: {0,1} -> {2,3} -> {4,5}
+    builder.addCall(1, 2);
+    builder.addCall(3, 4);
+
+    CallGraph cg(builder.getModule());
+    const SuperGraph& sg = cg.getSuperGraph();
+
+    EXPECT_EQ(sg.size(), 3);
+
+    SuperNode* sn01 = cg.getSuperNode(builder.getFunction(0));
+    SuperNode* sn23 = cg.getSuperNode(builder.getFunction(2));
+    SuperNode* sn45 = cg.getSuperNode(builder.getFunction(4));
+
+    // Test iteration order (reverse topological)
+    std::vector<SuperNode*> iterationOrder(sg.begin(), sg.end());
+    EXPECT_EQ(iterationOrder.size(), 3);
+
+    // In reverse topological order: leaves first (sn45), then sn23, then roots
+    // (sn01)
+    EXPECT_EQ(iterationOrder[0], sn45);  // Leaf (no successors)
+    EXPECT_EQ(iterationOrder[1], sn23);  // Middle
+    EXPECT_EQ(iterationOrder[2], sn01);  // Root (no predecessors)
+}
+
+// Test SuperGraph iterator
+TEST_F(CallGraphTest, SuperGraphIterator) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(4);
+
+    // Create two SCCs with connection
+    builder.addCall(0, 1);
+    builder.addCall(1, 0);
+    builder.addCall(2, 3);
+    builder.addCall(3, 2);
+    builder.addCall(1, 2);
+
+    CallGraph cg(builder.getModule());
+    const SuperGraph& sg = cg.getSuperGraph();
+
+    // Test basic iteration (should be in reverse topological order - bottom-up)
+    std::vector<SuperNode*> nodes(sg.begin(), sg.end());
+    EXPECT_EQ(nodes.size(), 2);
+
+    // In reverse topological order, the sink (no successors) should come first
+    EXPECT_TRUE(nodes[0]->getSuccessors().empty());   // Should be the sink
+    EXPECT_FALSE(nodes[1]->getSuccessors().empty());  // Should be the source
+
+    // The iteration order is reverse topological (bottom-up)
+    // So first node should have no successors (leaf)
+    // and last node should have no predecessors (root)
+}
+
+// Test SuperGraph complex case
+TEST_F(CallGraphTest, SuperGraphComplex) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(10);
+
+    // Create complex structure:
+    // SCC1: {0, 1, 2} - 3-node cycle
+    builder.addCall(0, 1);
+    builder.addCall(1, 2);
+    builder.addCall(2, 0);
+
+    // SCC2: {3} - self-recursive
+    builder.addCall(3, 3);
+
+    // SCC3: {4, 5} - mutual recursion
+    builder.addCall(4, 5);
+    builder.addCall(5, 4);
+
+    // Non-SCC nodes: 6, 7, 8, 9 in a chain
+    builder.addCall(6, 7);
+    builder.addCall(7, 8);
+    builder.addCall(8, 9);
+
+    // Connect: SCC1 -> SCC2 -> SCC3 -> chain
+    builder.addCall(2, 3);
+    builder.addCall(3, 4);
+    builder.addCall(5, 6);
+
+    CallGraph cg(builder.getModule());
+    const SuperGraph& sg = cg.getSuperGraph();
+
+    // Should have 7 super nodes: 3 SCCs + 4 individual nodes
+    EXPECT_EQ(sg.size(), 7);
+
+    SuperNode* sn012 = cg.getSuperNode(builder.getFunction(0));
+    SuperNode* sn3 = cg.getSuperNode(builder.getFunction(3));
+    SuperNode* sn45 = cg.getSuperNode(builder.getFunction(4));
+    SuperNode* sn6 = cg.getSuperNode(builder.getFunction(6));
+    SuperNode* sn7 = cg.getSuperNode(builder.getFunction(7));
+    SuperNode* sn8 = cg.getSuperNode(builder.getFunction(8));
+    SuperNode* sn9 = cg.getSuperNode(builder.getFunction(9));
+
+    // Check SCC properties
+    EXPECT_TRUE(sn012->isSCC());  // 3-node SCC
+    EXPECT_TRUE(sn3->isSCC());    // Self-recursive
+    EXPECT_TRUE(sn45->isSCC());   // 2-node SCC
+    EXPECT_FALSE(sn6->isSCC());   // Not recursive
+    EXPECT_FALSE(sn7->isSCC());   // Not recursive
+    EXPECT_FALSE(sn8->isSCC());   // Not recursive
+    EXPECT_FALSE(sn9->isSCC());   // Not recursive
+
+    // Check sizes
+    EXPECT_EQ(sn012->size(), 3);
+    EXPECT_EQ(sn3->size(), 1);
+    EXPECT_EQ(sn45->size(), 2);
+    EXPECT_EQ(sn6->size(), 1);
+    EXPECT_EQ(sn7->size(), 1);
+    EXPECT_EQ(sn8->size(), 1);
+    EXPECT_EQ(sn9->size(), 1);
+
+    // Check reverse topological order makes sense (leaves first)
+    std::vector<SuperNode*> iterationOrder(sg.begin(), sg.end());
+    EXPECT_EQ(iterationOrder.size(), 7);
+
+    // In reverse topological order, sn9 should come before sn6, etc. (leaves
+    // first)
+    auto pos012 =
+        std::find(iterationOrder.begin(), iterationOrder.end(), sn012);
+    auto pos3 = std::find(iterationOrder.begin(), iterationOrder.end(), sn3);
+    auto pos45 = std::find(iterationOrder.begin(), iterationOrder.end(), sn45);
+    auto pos6 = std::find(iterationOrder.begin(), iterationOrder.end(), sn6);
+    auto pos9 = std::find(iterationOrder.begin(), iterationOrder.end(), sn9);
+
+    EXPECT_GT(pos012, pos3);  // Root comes after its dependencies
+    EXPECT_GT(pos3, pos45);   // Dependencies come before dependents
+    EXPECT_GT(pos45, pos6);
+    EXPECT_GT(pos6, pos9);  // Leaves come first
+}
+
+// Test reverse topological order iteration
+TEST_F(CallGraphTest, SuperGraphReverseTopologicalIteration) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(6);
+
+    // Create a chain: SCC1 -> SCC2 -> SCC3
+    // SCC1: {0,1}
+    builder.addCall(0, 1);
+    builder.addCall(1, 0);
+
+    // SCC2: {2,3}
+    builder.addCall(2, 3);
+    builder.addCall(3, 2);
+
+    // SCC3: {4,5}
+    builder.addCall(4, 5);
+    builder.addCall(5, 4);
+
+    // Connect: SCC1 -> SCC2 -> SCC3
+    builder.addCall(1, 2);
+    builder.addCall(3, 4);
+
+    CallGraph cg(builder.getModule());
+    const SuperGraph& sg = cg.getSuperGraph();
+
+    SuperNode* sn01 = cg.getSuperNode(builder.getFunction(0));
+    SuperNode* sn23 = cg.getSuperNode(builder.getFunction(2));
+    SuperNode* sn45 = cg.getSuperNode(builder.getFunction(4));
+
+    // Test forward iteration (should be reverse topological = bottom-up)
+    std::vector<SuperNode*> forwardOrder(sg.begin(), sg.end());
+    EXPECT_EQ(forwardOrder.size(), 3);
+
+    // In reverse topological order: leaves first (sn45), then sn23, then roots
+    // (sn01)
+    EXPECT_EQ(forwardOrder[0], sn45);  // Leaf (no successors)
+    EXPECT_EQ(forwardOrder[1], sn23);  // Middle
+    EXPECT_EQ(forwardOrder[2], sn01);  // Root (no predecessors)
+
+    // Verify the properties
+    EXPECT_TRUE(sn45->getSuccessors().empty());     // Leaf
+    EXPECT_TRUE(sn01->getPredecessors().empty());   // Root
+    EXPECT_FALSE(sn23->getSuccessors().empty());    // Has successors
+    EXPECT_FALSE(sn23->getPredecessors().empty());  // Has predecessors
+}
+
 }  // namespace

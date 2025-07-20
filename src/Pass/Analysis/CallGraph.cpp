@@ -1,6 +1,7 @@
 #include "Pass/Analysis/CallGraph.h"
 
 #include <iostream>
+#include <queue>
 
 #include "IR/BasicBlock.h"
 #include "IR/Instructions/MemoryOps.h"
@@ -180,6 +181,131 @@ void CallGraph::CallChainIterator::advance() {
     }
 }
 
+void CallGraph::buildSuperGraph() const {
+    superGraph_ = std::make_unique<SuperGraph>();
+
+    for (size_t i = 0; i < sccs_.size(); ++i) {
+        SuperNode* superNode = superGraph_->addSuperNode(i, this);
+
+        for (Function* F : sccs_[i]) {
+            superNode->addFunction(F);
+            superGraph_->mapFunction(F, superNode);
+        }
+    }
+
+    struct PairHash {
+        size_t operator()(const std::pair<SuperNode*, SuperNode*>& p) const {
+            auto h1 = std::hash<void*>{}(p.first);
+            auto h2 = std::hash<void*>{}(p.second);
+            return h1 ^ (h2 << 1);
+        }
+    };
+
+    std::unordered_set<std::pair<SuperNode*, SuperNode*>, PairHash> addedEdges;
+
+    for (auto& [F, node] : nodes_) {
+        SuperNode* fromSuperNode = superGraph_->getSuperNode(F);
+        if (!fromSuperNode) continue;
+
+        for (CallGraphNode* calleeNode : node->getCallees()) {
+            Function* callee = calleeNode->getFunction();
+            SuperNode* toSuperNode = superGraph_->getSuperNode(callee);
+
+            if (!toSuperNode || fromSuperNode == toSuperNode) {
+                continue;
+            }
+
+            std::pair<SuperNode*, SuperNode*> edge = {fromSuperNode,
+                                                      toSuperNode};
+            if (addedEdges.find(edge) == addedEdges.end()) {
+                fromSuperNode->addSuccessor(toSuperNode);
+                addedEdges.insert(edge);
+            }
+        }
+    }
+}
+
+bool SuperNode::isSCC() const {
+    if (functions_.size() > 1) {
+        return true;
+    }
+
+    // For single-function SCCs, check if the function is self-recursive
+    if (functions_.size() == 1 && callGraph_) {
+        Function* singleFunction = *functions_.begin();
+        return callGraph_->isInSCC(singleFunction);
+    }
+
+    return false;
+}
+
+const std::vector<SuperNode*>& SuperGraph::getReverseTopologicalOrder() const {
+    if (!reverseTopologicalOrderCached_) {
+        reverseTopologicalOrder_.clear();
+        reverseTopologicalOrder_.reserve(superNodes_.size());
+
+        std::unordered_map<SuperNode*, int> outDegree;
+        std::queue<SuperNode*> zeroOutDegree;
+
+        outDegree.reserve(superNodes_.size());
+
+        for (const auto& superNode : superNodes_) {
+            outDegree[superNode.get()] = superNode->getSuccessors().size();
+            if (outDegree[superNode.get()] == 0) {
+                zeroOutDegree.push(superNode.get());
+            }
+        }
+
+        while (!zeroOutDegree.empty()) {
+            SuperNode* current = zeroOutDegree.front();
+            zeroOutDegree.pop();
+            reverseTopologicalOrder_.push_back(current);
+
+            for (SuperNode* predecessor : current->getPredecessors()) {
+                outDegree[predecessor]--;
+                if (outDegree[predecessor] == 0) {
+                    zeroOutDegree.push(predecessor);
+                }
+            }
+        }
+
+        reverseTopologicalOrderCached_ = true;
+    }
+    return reverseTopologicalOrder_;
+}
+
+void SuperGraph::print() const {
+    std::cout << "=== Super Graph (SCC Condensation) ===\n";
+
+    for (const auto& superNode : superNodes_) {
+        std::cout << "SuperNode " << superNode->getSCCIndex() << " (";
+        std::cout << superNode->size() << " functions): ";
+
+        for (Function* F : superNode->getFunctions()) {
+            std::cout << F->getName() << " ";
+        }
+        std::cout << "\n";
+
+        std::cout << "  Successors: ";
+        for (SuperNode* successor : superNode->getSuccessors()) {
+            std::cout << "SN" << successor->getSCCIndex() << " ";
+        }
+        std::cout << "\n";
+
+        std::cout << "  Predecessors: ";
+        for (SuperNode* predecessor : superNode->getPredecessors()) {
+            std::cout << "SN" << predecessor->getSCCIndex() << " ";
+        }
+        std::cout << "\n\n";
+    }
+
+    std::cout << "=== Iteration Order ===\n";
+    for (SuperNode* superNode : *this) {
+        std::cout << "SN" << superNode->getSCCIndex() << " ";
+    }
+    std::cout << "\n";
+}
+
 void CallGraph::print() const {
     std::cout << "=== Call Graph ===\n";
 
@@ -210,6 +336,10 @@ void CallGraph::print() const {
             }
             std::cout << "\n";
         }
+    }
+
+    if (superGraph_) {
+        superGraph_->print();
     }
 }
 
