@@ -412,3 +412,99 @@ entry:
 
 )");
 }
+
+TEST(ArrayInitializationTest, GEPStrideCalculation) {
+    auto context = std::make_unique<Context>();
+    auto module = std::make_unique<Module>("stride_test", context.get());
+    auto* int32Ty = context->getInt32Type();
+
+    // Create multi-dimensional array: [2][3][4] x i32
+    auto* arr1DTy = ArrayType::get(int32Ty, 4);  // [4 x i32] = 16 bytes
+    auto* arr2DTy = ArrayType::get(arr1DTy, 3);  // [3 x [4 x i32]] = 48 bytes
+    auto* arr3DTy =
+        ArrayType::get(arr2DTy, 2);  // [2 x [3 x [4 x i32]]] = 96 bytes
+
+    // Create simple initializer
+    std::vector<Constant*> level1;
+    for (int k = 0; k < 4; k++) {
+        level1.push_back(ConstantInt::get(int32Ty, k));
+    }
+    auto* arr1DConst = ConstantArray::get(arr1DTy, level1);
+
+    std::vector<Constant*> level2;
+    for (int j = 0; j < 3; j++) {
+        level2.push_back(arr1DConst);
+    }
+    auto* arr2DConst = ConstantArray::get(arr2DTy, level2);
+
+    std::vector<Constant*> level3;
+    for (int i = 0; i < 2; i++) {
+        level3.push_back(arr2DConst);
+    }
+    auto* arr3DConst = ConstantArray::get(arr3DTy, level3);
+
+    auto* arr3D =
+        GlobalVariable::Create(arr3DTy, false, GlobalVariable::ExternalLinkage,
+                               arr3DConst, "arr3d", module.get());
+
+    // Create test function
+    auto* funcTy = FunctionType::get(int32Ty, {});
+    auto* testFunc = Function::Create(funcTy, "test_stride", module.get());
+    auto* bb = BasicBlock::Create(context.get(), "entry", testFunc);
+    IRBuilder builder(bb);
+
+    // Test different numbers of indices
+    // GEP with 1 index: [2 x [3 x [4 x i32]]]* → [3 x [4 x i32]]*
+    auto* gep1 = builder.createGEP(arr3DTy, arr3D,
+                                   {ConstantInt::get(int32Ty, 0)}, "gep1");
+
+    // GEP with 2 indices: [2 x [3 x [4 x i32]]]* → [4 x i32]*
+    auto* gep2 = builder.createGEP(
+        arr3DTy, arr3D,
+        {ConstantInt::get(int32Ty, 0), ConstantInt::get(int32Ty, 1)}, "gep2");
+
+    // GEP with 3 indices: [2 x [3 x [4 x i32]]]* → i32*
+    auto* gep3 = builder.createGEP(
+        arr3DTy, arr3D,
+        {ConstantInt::get(int32Ty, 0), ConstantInt::get(int32Ty, 1),
+         ConstantInt::get(int32Ty, 2)},
+        "gep3");
+
+    // Load the final value
+    auto* val = builder.createLoad(gep3, "val");
+    builder.createRet(val);
+
+    // Verify strides
+    auto strides1 = gep1->getStrides();
+    auto strides2 = gep2->getStrides();
+    auto strides3 = gep3->getStrides();
+
+    std::cout << "GEP1 strides: ";
+    for (auto stride : strides1) std::cout << stride << " ";
+    std::cout << std::endl;
+
+    std::cout << "GEP2 strides: ";
+    for (auto stride : strides2) std::cout << stride << " ";
+    std::cout << std::endl;
+
+    std::cout << "GEP3 strides: ";
+    for (auto stride : strides3) std::cout << stride << " ";
+    std::cout << std::endl;
+
+    // Expected strides:
+    // GEP1 (1 index on [2 x [3 x [4 x i32]]]): stride = size of [3 x [4 x i32]]
+    // = 3 * 4 * 4 = 48 bytes GEP2 (2 indices): stride1 = 48 bytes, stride2 =
+    // size of [4 x i32] = 4 * 4 = 16 bytes GEP3 (3 indices): stride1 = 48
+    // bytes, stride2 = 16 bytes, stride3 = size of i32 = 4 bytes
+    EXPECT_EQ(strides1.size(), 1);
+    EXPECT_EQ(strides1[0], 48);  // [3 x [4 x i32]] = 3 * 4 * 4 = 48 bytes
+
+    EXPECT_EQ(strides2.size(), 2);
+    EXPECT_EQ(strides2[0], 48);  // [3 x [4 x i32]] = 48 bytes
+    EXPECT_EQ(strides2[1], 16);  // [4 x i32] = 4 * 4 = 16 bytes
+
+    EXPECT_EQ(strides3.size(), 3);
+    EXPECT_EQ(strides3[0], 48);  // [3 x [4 x i32]] = 48 bytes
+    EXPECT_EQ(strides3[1], 16);  // [4 x i32] = 16 bytes
+    EXPECT_EQ(strides3[2], 4);   // i32 = 4 bytes
+}

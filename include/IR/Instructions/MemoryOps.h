@@ -127,6 +127,9 @@ class GetElementPtrInst : public Instruction {
     Value* getIndex(unsigned i) const {
         return i < getNumIndices() ? getOperand(i + 1) : nullptr;
     }
+    
+    // Get stride for each dimension (for backend code generation)
+    std::vector<unsigned> getStrides() const;
 
     Instruction* clone() const override;
 

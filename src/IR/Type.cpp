@@ -112,4 +112,24 @@ Type* Type::getMultiLevelElementType(unsigned levels) const {
     return current;
 }
 
+unsigned Type::getSizeInBytes() const {
+    if (isIntegerType()) {
+        auto* intTy = static_cast<const IntegerType*>(this);
+        return (intTy->getBitWidth() + 7) / 8;
+    }
+    if (isFloatType()) {
+        return 4;  // float = 4 bytes
+    }
+    if (isPointerType()) {
+        return 8;  // pointer = 8 bytes (64-bit)
+    }
+    if (isArrayType()) {
+        auto* arrayTy = static_cast<const ArrayType*>(this);
+        return arrayTy->getNumElements() *
+               arrayTy->getElementType()->getSizeInBytes();
+    }
+    // For other types (void, label, etc.), return 0
+    return 0;
+}
+
 }  // namespace midend

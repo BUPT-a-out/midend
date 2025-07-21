@@ -51,6 +51,9 @@ class Type {
 
     // Get multi-level element type (for GEP with multiple indices)
     Type *getMultiLevelElementType(unsigned levels) const;
+    
+    // Get size of type in bytes (for backend code generation)
+    unsigned getSizeInBytes() const;
 
     virtual std::string toString() const = 0;
 };
