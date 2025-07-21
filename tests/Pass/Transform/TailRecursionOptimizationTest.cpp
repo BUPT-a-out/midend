@@ -975,13 +975,28 @@ TEST_F(TailRecursionOptimizationTest, ComplexMultiReturnEnvironment) {
     auto result = builder->createAdd(acc, builder->getInt32(1));
     builder->createRet(result);
 
+    auto evenBB = BasicBlock::Create(ctx.get(), "even", func);
+    auto oddBB = BasicBlock::Create(ctx.get(), "odd", func);
+    auto callBB = BasicBlock::Create(ctx.get(), "call", func);
+
     builder->setInsertPoint(tailBB);
     auto mod = builder->createRem(n, builder->getInt32(2));
     auto isEven = builder->createICmpEQ(mod, builder->getInt32(0));
+    builder->createCondBr(isEven, evenBB, oddBB);
+
+    builder->setInsertPoint(evenBB);
+    auto acc1_even = builder->createMul(acc, builder->getInt32(2));
+    builder->createBr(callBB);
+
+    builder->setInsertPoint(oddBB);
+    auto acc1_odd = builder->createAdd(acc, n);
+    builder->createBr(callBB);
+
+    builder->setInsertPoint(callBB);
+    auto acc1 = builder->createPHI(intType);
+    acc1->addIncoming(acc1_even, evenBB);
+    acc1->addIncoming(acc1_odd, oddBB);
     auto n1 = builder->createSub(n, builder->getInt32(1));
-    auto acc1 = builder->createSelect(
-        isEven, builder->createMul(acc, builder->getInt32(2)),
-        builder->createAdd(acc, n));
     auto callInst = builder->createCall(func, {n1, acc1});
     builder->createRet(callInst);
 
@@ -1002,11 +1017,17 @@ ret3:
 tail:
   %3 = srem i32 %n, 2
   %4 = icmp eq i32 %3, 0
-  %5 = sub i32 %n, 1
-  %6 = mul i32 %acc, 2
-  %7 = add i32 %acc, %n
-  %8 = select i1 %4, i32 %6, i32 %7
-  %9 = call i32 @complex_ret(i32 %5, i32 %8)
+  br i1 %4, label %even, label %odd
+even:
+  %5 = mul i32 %acc, 2
+  br label %call
+odd:
+  %6 = add i32 %acc, %n
+  br label %call
+call:
+  %7 = phi i32 [ %5, %even ], [ %6, %odd ]
+  %8 = sub i32 %n, 1
+  %9 = call i32 @complex_ret(i32 %8, i32 %7)
   ret i32 %9
 }
 )");
@@ -1016,14 +1037,13 @@ tail:
 
     EXPECT_TRUE(changed);
 
-    // Check IR after optimization
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @complex_ret(i32 %n, i32 %acc) {
 entry:
   br label %tail_recursion_loop
 tail_recursion_loop:
-  %n.phi = phi i32 [ %n, %entry ], [ %0, %tail ]
-  %acc.phi = phi i32 [ %acc, %entry ], [ %1, %tail ]
+  %n.phi = phi i32 [ %n, %entry ], [ %0, %call ]
+  %acc.phi = phi i32 [ %acc, %entry ], [ %1, %call ]
   %2 = icmp sle i32 %n.phi, 0
   br i1 %2, label %ret1, label %ret2
 ret1:
@@ -1037,10 +1057,16 @@ ret3:
 tail:
   %5 = srem i32 %n.phi, 2
   %6 = icmp eq i32 %5, 0
-  %0 = sub i32 %n.phi, 1
+  br i1 %6, label %even, label %odd
+even:
   %7 = mul i32 %acc.phi, 2
+  br label %call
+odd:
   %8 = add i32 %acc.phi, %n.phi
-  %1 = select i1 %6, i32 %7, i32 %8
+  br label %call
+call:
+  %1 = phi i32 [ %7, %even ], [ %8, %odd ]
+  %0 = sub i32 %n.phi, 1
   br label %tail_recursion_loop
 }
 )");

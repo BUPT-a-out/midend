@@ -60,38 +60,6 @@ class CallInst : public Instruction {
     }
 };
 
-class SelectInst : public Instruction {
-   private:
-    SelectInst(Value* cond, Value* trueVal, Value* falseVal,
-               const std::string& name = "")
-        : Instruction(trueVal->getType(), Opcode::Select, 3) {
-        setOperand(0, cond);
-        setOperand(1, trueVal);
-        setOperand(2, falseVal);
-        setName(name);
-    }
-
-   public:
-    static SelectInst* Create(Value* cond, Value* trueVal, Value* falseVal,
-                              const std::string& name = "",
-                              BasicBlock* parent = nullptr);
-
-    Value* getCondition() const { return getOperand(0); }
-    Value* getTrueValue() const { return getOperand(1); }
-    Value* getFalseValue() const { return getOperand(2); }
-
-    Instruction* clone() const override {
-        return Create(getCondition(), getTrueValue(), getFalseValue(),
-                      getName());
-    }
-
-    static bool classof(const Value* v) {
-        if (!isa<Instruction>(v)) return false;
-        return static_cast<const Instruction*>(v)->getOpcode() ==
-               Opcode::Select;
-    }
-};
-
 class CastInst : public Instruction {
    public:
     enum CastOps {

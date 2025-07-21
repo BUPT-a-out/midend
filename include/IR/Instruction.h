@@ -65,7 +65,6 @@ enum class Opcode {
 
     // Other
     PHI,
-    Select,
     Cast,
     Move,
 };

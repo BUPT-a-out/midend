@@ -266,6 +266,7 @@ class PassManager {
     AnalysisManager analysisManager_;
 
     bool runPassOnModule(Pass& pass, Module& m);
+    bool runPassOnFunction(Pass& pass, Function& f);
 
    public:
     PassManager() = default;

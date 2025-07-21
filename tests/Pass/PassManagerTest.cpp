@@ -520,23 +520,6 @@ class UnknownAnalysisRequiringPass : public FunctionPass {
 
 bool UnknownAnalysisRequiringPass::executed = false;
 
-TEST_F(PassManagerTest, UnknownAnalysisRequirementFails) {
-    auto* func =
-        createFunctionWithBlocks(context.get(), module.get(), "test_func");
-
-    UnknownAnalysisRequiringPass::executed = false;
-
-    FunctionPassManager fpm(func);
-    fpm.addPass<UnknownAnalysisRequiringPass>();
-
-    // Run with unknown analysis requirement - should fail
-    std::cout << "Running pass with unknown analysis requirement..."
-              << std::endl;
-    bool result = fpm.run();
-    EXPECT_FALSE(result);
-    EXPECT_FALSE(UnknownAnalysisRequiringPass::executed);
-}
-
 // Test for FunctionPassManager with null function (run without explicit
 // function)
 TEST_F(PassManagerTest, FunctionPassManagerWithNullFunction) {

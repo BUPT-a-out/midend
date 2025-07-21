@@ -15,6 +15,15 @@
 		],
 		"description": "Function Expect IR String"
 	},
+	"mod_expect": {
+		"scope": "cpp",
+		"prefix": "mod_expect",
+		"body": [
+			"EXPECT_EQ(IRPrinter().print(module), R\"($1)\");",
+			"$2"
+		],
+		"description": "Module Expect IR String"
+	},
 	"print_func": {
 		"scope": "cpp",
 		"prefix": "print_func",
@@ -22,5 +31,13 @@
 			"std::cout << IRPrinter().print(func) << std::endl;"
 		],
 		"description": "Print function IR"
+	},
+	"print_mod": {
+		"scope": "cpp",
+		"prefix": "print_mod",
+		"body": [
+			"std::cout << IRPrinter().print(module) << std::endl;"
+		],
+		"description": "Print module IR"
 	}
 }

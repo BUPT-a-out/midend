@@ -387,13 +387,6 @@ class IRBuilder {
         return inst;
     }
 
-    SelectInst* createSelect(Value* cond, Value* trueVal, Value* falseVal,
-                             const std::string& name = "") {
-        auto* inst = SelectInst::Create(cond, trueVal, falseVal);
-        insertHelper(inst, name);
-        return inst;
-    }
-
     Value* createCast(CastInst::CastOps op, Value* val, Type* destTy,
                       const std::string& name = "") {
         auto* inst = CastInst::Create(op, val, destTy);

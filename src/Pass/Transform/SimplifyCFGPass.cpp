@@ -166,6 +166,22 @@ void SimplifyCFGPass::mergeBlockIntoPredecessor(BasicBlock* block) {
         pred->push_back(&inst);
     }
 
+    std::vector<Use*> users;
+    for (auto* use : block->users()) {
+        users.push_back(use);
+    }
+
+    for (auto* use : users) {
+        auto* user = use->getUser();
+        if (auto* phi = dyn_cast<PHINode>(user)) {
+            for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
+                if (phi->getIncomingBlock(i) == block) {
+                    phi->setIncomingBlock(i, pred);
+                }
+            }
+        }
+    }
+
     block->eraseFromParent();
 }
 
@@ -188,31 +204,28 @@ bool SimplifyCFGPass::eliminateEmptyBlocks(Function& function) {
                 continue;
             }
 
-            auto predecessors = block->getPredecessors();
-            if (predecessors.size() != 1) {
-                continue;
-            }
-            auto predecessor = predecessors[0];
-
-            if (auto* branch = dyn_cast<BranchInst>(block->getTerminator())) {
-                auto* target = branch->getTargetBB();
-                if (target) {
-                    auto successors = block->getSuccessors();
-                    block->replaceAllUsesBy([&](Use*& use) {
-                        auto user = use->getUser();
-                        if (isa<BranchInst>(user)) {
-                            use->set(target);
-                        } else {
-                            use->set(predecessor);
+            for (auto predecessor : block->getPredecessors()) {
+                if (auto* branch =
+                        dyn_cast<BranchInst>(block->getTerminator())) {
+                    auto* target = branch->getTargetBB();
+                    if (target) {
+                        auto successors = block->getSuccessors();
+                        block->replaceAllUsesBy([&](Use*& use) {
+                            auto user = use->getUser();
+                            if (isa<BranchInst>(user)) {
+                                use->set(target);
+                            } else {
+                                use->set(predecessor);
+                            }
+                        });
+                        block->replaceAllUsesWith(target);
+                        block->eraseFromParent();
+                        for (auto* succ : successors) {
+                            succ->invalidatePredecessorCache();
                         }
-                    });
-                    block->replaceAllUsesWith(target);
-                    block->eraseFromParent();
-                    for (auto* succ : successors) {
-                        succ->invalidatePredecessorCache();
+                        iterChanged = true;
+                        changed = true;
                     }
-                    iterChanged = true;
-                    changed = true;
                 }
             }
         }

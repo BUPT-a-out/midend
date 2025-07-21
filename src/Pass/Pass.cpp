@@ -33,33 +33,51 @@ bool BasicBlockPass::runOnFunction(Function& f, AnalysisManager& am) {
 // ============================================================================
 
 bool PassManager::runPassOnModule(Pass& pass, Module& m) {
+    bool changed = false;
+    if (pass.getKind() == Pass::PassKind::FunctionPass ||
+        pass.getKind() == Pass::PassKind::BasicBlockPass) {
+        for (auto f : m) {
+            changed |= runPassOnFunction(pass, *f);
+        }
+        return changed;
+    }
     std::unordered_set<std::string> required, preserved;
     pass.getAnalysisUsage(required, preserved);
 
-    for (const auto& requiredAnalysis : required) {
-        if (analysisManager_.getAnalysis<AnalysisResult>(requiredAnalysis, m) ==
-            nullptr) {
-            std::cerr << "Warning: Required analysis " << requiredAnalysis
-                      << " not found for module " << m.getName() << std::endl;
-            return false;
-        }
+    changed = pass.runOnModule(m, analysisManager_);
+
+    if (changed) {
+        analysisManager_.invalidateAllAnalyses(m);
     }
+
+    return changed;
+}
+
+bool PassManager::runPassOnFunction(Pass& pass, Function& f) {
+    std::unordered_set<std::string> before_required, before_preserved;
+    pass.getAnalysisUsage(before_required, before_preserved);
 
     bool changed = false;
     switch (pass.getKind()) {
-        case Pass::PassKind::ModulePass:
         case Pass::PassKind::FunctionPass:
-            changed = pass.runOnModule(m, analysisManager_);
-            break;
         case Pass::PassKind::BasicBlockPass:
-            for (auto& fn : m) {
-                changed |= pass.runOnFunction(*fn, analysisManager_);
-            }
+            changed = pass.runOnFunction(f, analysisManager_);
+            break;
+        default:
+            std::cerr << "Warning: Module passes cannot be run on functions: "
+                      << pass.getName() << std::endl;
             break;
     }
 
     if (changed) {
-        analysisManager_.invalidateAllAnalyses(m);
+        std::unordered_set<std::string> after_required, after_preserved;
+        pass.getAnalysisUsage(after_required, after_preserved);
+        auto registeredAnalyses = analysisManager_.getRegisteredAnalyses(f);
+        for (const auto& analysisName : registeredAnalyses) {
+            if (after_preserved.find(analysisName) == after_preserved.end()) {
+                analysisManager_.invalidateAnalysis(analysisName, f);
+            }
+        }
     }
 
     return changed;
@@ -69,15 +87,6 @@ bool FunctionPassManager::runPassOnFunction(Pass& pass, Function& f) {
     std::unordered_set<std::string> before_required, before_preserved;
     pass.getAnalysisUsage(before_required, before_preserved);
 
-    for (const auto& requiredAnalysis : before_required) {
-        if (analysisManager_.getAnalysis<AnalysisResult>(requiredAnalysis, f) ==
-            nullptr) {
-            std::cerr << "Warning: Required analysis " << requiredAnalysis
-                      << " not found for function " << f.getName() << std::endl;
-            return false;
-        }
-    }
-
     bool changed = false;
     switch (pass.getKind()) {
         case Pass::PassKind::FunctionPass:
@@ -85,9 +94,8 @@ bool FunctionPassManager::runPassOnFunction(Pass& pass, Function& f) {
             changed = pass.runOnFunction(f, analysisManager_);
             break;
         default:
-            std::cerr << "Warning: Module passes cannot be run in function "
-                         "pass manager"
-                      << std::endl;
+            std::cerr << "Warning: Module passes cannot be run on functions: "
+                      << pass.getName() << std::endl;
             break;
     }
 
@@ -151,6 +159,7 @@ bool PassBuilder::parsePassPipeline(FunctionPassManager& fpm,
 bool PassManager::run(Module& m) {
     bool changed = false;
     for (auto& pass : passes_) {
+        std::cout << "Running pass: " << pass->getName() << std::endl;
         changed |= runPassOnModule(*pass, m);
     }
     return changed;

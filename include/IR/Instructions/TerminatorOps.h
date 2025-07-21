@@ -1,5 +1,6 @@
 #pragma once
 
+#include "IR/BasicBlock.h"
 #include "IR/Constant.h"
 #include "IR/Instruction.h"
 #include "IR/Type.h"
@@ -8,7 +9,6 @@ namespace midend {
 
 class Context;
 class ConstantInt;
-class BasicBlock;
 
 class ReturnInst : public Instruction {
    private:
@@ -132,6 +132,12 @@ class PHINode : public Instruction {
             return reinterpret_cast<BasicBlock*>(val);
         }
         return nullptr;
+    }
+
+    void setIncomingBlock(unsigned i, BasicBlock* bb) {
+        if (i < getNumIncomingValues()) {
+            setOperand(i * 2 + 1, bb);
+        }
     }
 
     bool isTrival() {

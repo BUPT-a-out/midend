@@ -178,21 +178,6 @@ TEST_F(InstructionTest, CallInstruction) {
     EXPECT_EQ(call->getType(), int32Ty);
 }
 
-TEST_F(InstructionTest, SelectInstruction) {
-    auto* cond = builder->getTrue();
-    auto* trueVal = builder->getInt32(10);
-    auto* falseVal = builder->getInt32(20);
-
-    auto* select =
-        builder->createSelect(cond, trueVal, falseVal, "select_result");
-
-    EXPECT_EQ(select->getOpcode(), Opcode::Select);
-    EXPECT_EQ(select->getCondition(), cond);
-    EXPECT_EQ(select->getTrueValue(), trueVal);
-    EXPECT_EQ(select->getFalseValue(), falseVal);
-    EXPECT_EQ(select->getType(), trueVal->getType());
-}
-
 TEST_F(InstructionTest, InstructionMovement) {
     auto* inst1 =
         builder->createAlloca(context->getInt32Type(), nullptr, "var1");
@@ -326,18 +311,6 @@ TEST_F(InstructionTest, OtherOpsDirectCreateWithParent) {
     EXPECT_EQ(call2->getCalledFunction(), callee);
     EXPECT_EQ(call2->getNumArgOperands(), 2u);
 
-    // Test SelectInst::Create with parent parameter
-    auto* cond = builder->getTrue();
-    auto* trueVal = builder->getInt32(100);
-    auto* falseVal = builder->getInt32(200);
-    auto* select =
-        SelectInst::Create(cond, trueVal, falseVal, "select_test", bb);
-    EXPECT_EQ(select->getParent(), bb);
-    EXPECT_EQ(select->getOpcode(), Opcode::Select);
-    EXPECT_EQ(select->getCondition(), cond);
-    EXPECT_EQ(select->getTrueValue(), trueVal);
-    EXPECT_EQ(select->getFalseValue(), falseVal);
-
     // Test CastInst::Create with parent parameter
     auto* intVal = builder->getInt32(42);
     auto* castToFloat = CastInst::Create(CastInst::SIToFP, intVal, floatTy,
@@ -355,7 +328,7 @@ TEST_F(InstructionTest, OtherOpsDirectCreateWithParent) {
     EXPECT_EQ(move->getValue(), intVal);
 
     // Verify all instructions are in the basic block
-    EXPECT_EQ(bb->size(), 5u);
+    EXPECT_EQ(bb->size(), 4u);
 }
 
 TEST_F(InstructionTest, CallInstClone) {
@@ -695,25 +668,6 @@ TEST_F(InstructionTest, InstructionCloneMethods) {
 
     delete storeInst;
     delete clonedStore;
-
-    // Test SelectInst clone
-    auto* cond = builder->getTrue();
-    auto* trueVal = builder->getInt32(100);
-    auto* falseVal = builder->getInt32(200);
-    auto* selectInst =
-        SelectInst::Create(cond, trueVal, falseVal, "select_test");
-    auto* clonedSelect = selectInst->clone();
-    auto* clonedSelectInst = dyn_cast<SelectInst>(clonedSelect);
-
-    ASSERT_NE(clonedSelectInst, nullptr);
-    EXPECT_EQ(clonedSelectInst->getCondition(), cond);
-    EXPECT_EQ(clonedSelectInst->getTrueValue(), trueVal);
-    EXPECT_EQ(clonedSelectInst->getFalseValue(), falseVal);
-    EXPECT_EQ(clonedSelectInst->getName(), "select_test");
-    EXPECT_NE(clonedSelectInst, selectInst);
-
-    delete selectInst;
-    delete clonedSelect;
 
     // Test CastInst clone
     auto* castInst =

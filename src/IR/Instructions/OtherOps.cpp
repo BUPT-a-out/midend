@@ -28,15 +28,6 @@ Instruction* CallInst::clone() const {
     return Create(getFunctionType(), getCalledValue(), args, getName());
 }
 
-SelectInst* SelectInst::Create(Value* cond, Value* trueVal, Value* falseVal,
-                               const std::string& name, BasicBlock* parent) {
-    auto* inst = new SelectInst(cond, trueVal, falseVal, name);
-    if (parent) {
-        parent->push_back(inst);
-    }
-    return inst;
-}
-
 CastInst* CastInst::Create(CastOps op, Value* val, Type* destTy,
                            const std::string& name, BasicBlock* parent) {
     auto* inst = new CastInst(op, val, destTy, name);

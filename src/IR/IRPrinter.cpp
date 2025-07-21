@@ -372,7 +372,15 @@ void IRPrinter::printInstruction(const Instruction* inst) {
             for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
                 if (i > 0) result += ",";
                 result += " [ " + getValueName(phi->getIncomingValue(i)) + ", ";
-                result += "%" + phi->getIncomingBlock(i)->getName() + " ]";
+                auto* block = phi->getIncomingBlock(i);
+                if (block) {
+                    result += "%" + block->getName() + " ]";
+                } else {
+                    result += "%<null> ]";
+                    std::cerr << "Error: PHI node " << phi->getName()
+                              << " has null incoming block at index " << i
+                              << std::endl;
+                }
             }
             break;
         }
@@ -436,16 +444,6 @@ void IRPrinter::printInstruction(const Instruction* inst) {
             // represented differently
             result += "mov " + printType(inst->getType()) + " ";
             result += getValueName(inst->getOperand(0));
-            break;
-
-        case Opcode::Select:
-            result +=
-                "select " + printType(inst->getOperand(0)->getType()) + " ";
-            result += getValueName(inst->getOperand(0)) + ", ";
-            result += printType(inst->getOperand(1)->getType()) + " ";
-            result += getValueName(inst->getOperand(1)) + ", ";
-            result += printType(inst->getOperand(2)->getType()) + " ";
-            result += getValueName(inst->getOperand(2));
             break;
 
         default:
