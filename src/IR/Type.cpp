@@ -92,4 +92,13 @@ PointerType* FloatType::getPointerTo() { return PointerType::get(this); }
 
 PointerType* VoidType::getPointerTo() { return PointerType::get(this); }
 
+Type* Type::getBasicElementType() const {
+    const Type* current = this;
+    while (current->isArrayType()) {
+        auto* arrayType = static_cast<const ArrayType*>(current);
+        current = arrayType->getElementType();
+    }
+    return const_cast<Type*>(current);
+}
+
 }  // namespace midend

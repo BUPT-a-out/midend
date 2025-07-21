@@ -46,6 +46,9 @@ class Type {
     virtual unsigned getBitWidth() const { return 0; }
     virtual bool isSized() const { return true; }
 
+    // Get the ultimate base element type for arrays
+    Type *getBasicElementType() const;
+
     virtual std::string toString() const = 0;
 };
 

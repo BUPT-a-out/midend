@@ -773,7 +773,7 @@ TEST_F(IRPrinterTest, PrintGetElementPtr) {
         "  %array = alloca [10 x i32]\n"
         "  %element_ptr = getelementptr [10 x i32], [10 x i32]* %array, i32 0, "
         "i32 5\n"
-        "  %element = load [10 x i32], [10 x i32]* %element_ptr\n"
+        "  %element = load i32, i32* %element_ptr\n"
         "  ret void\n"
         "}\n";
     EXPECT_EQ(output, expected);

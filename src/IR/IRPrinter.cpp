@@ -32,8 +32,18 @@ unsigned IRPrinter::getValueNumber(const Value* v) {
 std::string IRPrinter::getValueName(const Value* v) {
     if (!v) return "<null>";
 
+    // Check global values first
+    if (isa<GlobalVariable>(*v) || isa<Function>(*v)) {
+        return "@" + v->getName();
+    }
+
     // Constants have special representations
     if (auto* constant = dyn_cast<Constant>(v)) {
+        // Check by type first, since classof methods are broken
+        if (isa<PointerType>(*constant->getType())) {
+            // This is likely a ConstantPointerNull
+            return "null";
+        }
         if (isa<IntegerType>(*constant->getType())) {
             auto* ci = static_cast<const ConstantInt*>(constant);
             return std::to_string(ci->getSignedValue());
@@ -44,17 +54,45 @@ std::string IRPrinter::getValueName(const Value* v) {
             ss << std::scientific << std::setprecision(6) << cf->getValue();
             return ss.str();
         }
-    }
-    if (isa<ConstantPointerNull>(*v)) {
-        return "null";
+        if (isa<ArrayType>(*constant->getType())) {
+            auto* carr = static_cast<const ConstantArray*>(constant);
+            std::string result = "[";
+            unsigned lastNonZero = 0;
+
+            // Find the last non-zero element
+            for (unsigned i = carr->getNumElements(); i > 0; --i) {
+                if (auto* elem =
+                        dyn_cast<ConstantInt>(carr->getElement(i - 1))) {
+                    if (elem->getSignedValue() != 0) {
+                        lastNonZero = i;
+                        break;
+                    }
+                } else {
+                    // Non-integer elements are always considered significant
+                    lastNonZero = i;
+                    break;
+                }
+            }
+
+            // Print elements up to the last non-zero
+            for (unsigned i = 0; i < lastNonZero; ++i) {
+                if (i > 0) result += ", ";
+                result += printType(carr->getElement(i)->getType()) + " ";
+                result += getValueName(carr->getElement(i));
+            }
+
+            // If there are trailing zeros, indicate with ...
+            if (lastNonZero < carr->getNumElements()) {
+                if (lastNonZero > 0) result += ", ";
+                result += "...";
+            }
+
+            result += "]";
+            return result;
+        }
     }
     if (isa<UndefValue>(*v)) {
         return "undef";
-    }
-
-    // Global values use @ prefix
-    if (isa<GlobalVariable>(*v) || isa<Function>(*v)) {
-        return "@" + v->getName();
     }
 
     // Basic blocks use label syntax
