@@ -247,6 +247,14 @@ TEST(ArrayInitializationTest, ArrayParameterFunction) {
                           {ConstantInt::get(int32Ty, 1)}, "arr2.0.1.ptr");
     auto* arr2_0_1_Val = builder.createLoad(arr2_0_1_Ptr, "arr2.0.1");
 
+    // arr2[0][1]
+
+    auto* arr2_0_1_Ptr2 = builder.createGEP(
+        arrayOf5Ty, arr2Row0Ptr,
+        {ConstantInt::get(int32Ty, 1), ConstantInt::get(int32Ty, 2)},
+        "arr2.0.1.ptr_2");
+    builder.createLoad(arr2_0_1_Ptr2, "arr2.0.1_2");
+
     // return arr[0] + arr[1] + arr2[0][0] + arr2[0][1]
     auto* sum1 = builder.createAdd(arr0Val, arr1Val, "sum1");
     auto* sum2 = builder.createAdd(sum1, arr2_0_0_Val, "sum2");
@@ -307,6 +315,8 @@ entry:
   %arr2.0.0 = load i32, i32* %arr2.0.0.ptr
   %arr2.0.1.ptr = getelementptr [5 x i32], [5 x i32]* %arr2.0.ptr, i32 1
   %arr2.0.1 = load i32, i32* %arr2.0.1.ptr
+  %arr2.0.1.ptr_2 = getelementptr [5 x i32], [5 x i32]* %arr2.0.ptr, i32 1, i32 2
+  %arr2.0.1_2 = load i32, i32* %arr2.0.1.ptr_2
   %sum1 = add i32 %arr.0, %arr.1
   %sum2 = add i32 %sum1, %arr2.0.0
   %result = add i32 %sum2, %arr2.0.1
