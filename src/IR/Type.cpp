@@ -92,13 +92,24 @@ PointerType* FloatType::getPointerTo() { return PointerType::get(this); }
 
 PointerType* VoidType::getPointerTo() { return PointerType::get(this); }
 
-Type* Type::getBasicElementType() const {
-    const Type* current = this;
-    while (current->isArrayType()) {
-        auto* arrayType = static_cast<const ArrayType*>(current);
-        current = arrayType->getElementType();
+Type* Type::getSingleElementType() const {
+    if (isArrayType()) {
+        auto* arrayType = static_cast<const ArrayType*>(this);
+        return arrayType->getElementType();
     }
-    return const_cast<Type*>(current);
+    if (isPointerType()) {
+        auto* ptrType = static_cast<const PointerType*>(this);
+        return ptrType->getElementType();
+    }
+    return const_cast<Type*>(this);
+}
+
+Type* Type::getMultiLevelElementType(unsigned levels) const {
+    Type* current = const_cast<Type*>(this);
+    for (unsigned i = 0; i < levels; ++i) {
+        current = current->getSingleElementType();
+    }
+    return current;
 }
 
 }  // namespace midend

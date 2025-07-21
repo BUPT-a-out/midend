@@ -46,8 +46,11 @@ class Type {
     virtual unsigned getBitWidth() const { return 0; }
     virtual bool isSized() const { return true; }
 
-    // Get the ultimate base element type for arrays
-    Type *getBasicElementType() const;
+    // Get single-level element type
+    Type *getSingleElementType() const;
+
+    // Get multi-level element type (for GEP with multiple indices)
+    Type *getMultiLevelElementType(unsigned levels) const;
 
     virtual std::string toString() const = 0;
 };

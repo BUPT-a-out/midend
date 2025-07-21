@@ -100,9 +100,11 @@ class GetElementPtrInst : public Instruction {
     GetElementPtrInst(Type* pointeeType, Value* ptr,
                       const std::vector<Value*>& indices,
                       const std::string& name = "")
-        : Instruction(ptr ? PointerType::get(pointeeType->getBasicElementType())
-                          : nullptr,
-                      Opcode::GetElementPtr, 1 + indices.size()),
+        : Instruction(
+              ptr ? PointerType::get(
+                        pointeeType->getMultiLevelElementType(indices.size()))
+                  : nullptr,
+              Opcode::GetElementPtr, 1 + indices.size()),
           sourceElementType_(pointeeType) {
         setOperand(0, ptr);
         for (size_t i = 0; i < indices.size(); ++i) {
