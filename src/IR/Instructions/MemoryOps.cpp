@@ -45,7 +45,7 @@ GetElementPtrInst* GetElementPtrInst::Create(Type* pointeeType, Value* ptr,
 std::vector<unsigned> GetElementPtrInst::getStrides() const {
     std::vector<unsigned> strides;
     Type* currentType = sourceElementType_;
-    
+
     // Calculate stride for each dimension
     for (unsigned i = 0; i < getNumIndices(); ++i) {
         if (currentType->isArrayType()) {
@@ -68,7 +68,7 @@ std::vector<unsigned> GetElementPtrInst::getStrides() const {
             strides.push_back(stride);
         }
     }
-    
+
     return strides;
 }
 

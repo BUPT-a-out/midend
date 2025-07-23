@@ -33,7 +33,8 @@ class ConstantInt : public Constant {
     static ConstantInt* getTrue(Context* ctx);
     static ConstantInt* getFalse(Context* ctx);
 
-    uint64_t getValue() const { return value_; }
+    int64_t getValue() const { return getSignedValue(); }
+    uint64_t getUnsignedValue() const { return value_; }
     int64_t getSignedValue() const { return static_cast<int64_t>(value_); }
 
     bool isZero() const { return value_ == 0; }
