@@ -1,5 +1,6 @@
 #include "IR/Type.h"
 
+#include <iostream>
 #include <sstream>
 
 #include "IR/Value.h"
@@ -55,7 +56,8 @@ VoidType* Context::getVoidType() { return voidType_.get(); }
 
 IntegerType* Context::getIntegerType(unsigned bits) {
     if (bits != 1 && bits != 32) {
-        return nullptr;
+        std::cerr << "Warning: unsupported integer type bits: " << bits
+                  << ". Only 1 and 32 bits are supported." << std::endl;
     }
     auto& type = integerTypes_[bits];
     if (!type) {

@@ -40,16 +40,6 @@ TEST_F(TypeTest, IntegerTypes) {
     auto* int32 = context->getInt32Type();
     EXPECT_EQ(int32->getBitWidth(), 32u);
     EXPECT_FALSE(int32->isBool());
-
-    // Test that unsupported types return nullptr
-    auto* int8 = context->getIntegerType(8);
-    EXPECT_EQ(int8, nullptr);
-
-    auto* int16 = context->getIntegerType(16);
-    EXPECT_EQ(int16, nullptr);
-
-    auto* int64 = context->getIntegerType(64);
-    EXPECT_EQ(int64, nullptr);
 }
 
 TEST_F(TypeTest, PointerTypes) {
@@ -195,29 +185,6 @@ TEST_F(TypeTest, LabelTypeGetAndToString) {
     // Test LabelType::classof
     EXPECT_TRUE(LabelType::classof(labelTy));
     EXPECT_FALSE(LabelType::classof(context->getInt32Type()));
-}
-
-TEST_F(TypeTest, IntegerTypeExtended) {
-    // Test getIntegerType with supported bit widths
-    auto* int1Ty = context->getIntegerType(1);
-    auto* int32Ty = context->getIntegerType(32);
-
-    EXPECT_NE(int1Ty, nullptr);
-    EXPECT_EQ(int1Ty->getBitWidth(), 1u);
-    EXPECT_TRUE(int1Ty->isBool());
-
-    EXPECT_NE(int32Ty, nullptr);
-    EXPECT_EQ(int32Ty->getBitWidth(), 32u);
-    EXPECT_FALSE(int32Ty->isBool());
-
-    // Test unsupported bit widths should return nullptr
-    auto* int16Ty = context->getIntegerType(16);
-    auto* int64Ty = context->getIntegerType(64);
-    auto* int8Ty = context->getIntegerType(8);
-
-    EXPECT_EQ(int16Ty, nullptr);
-    EXPECT_EQ(int64Ty, nullptr);
-    EXPECT_EQ(int8Ty, nullptr);
 }
 
 TEST_F(TypeTest, PointerTypeEquality) {
