@@ -343,7 +343,7 @@ TEST_F(IRPrinterTest, PrintConstants) {
     std::string expected =
         "define void @test_constants() {\n"
         "entry:\n"
-        "  %sum = add i32 42, 4294967196\n"
+        "  %sum = add i32 42, -100\n"
         "  %product = mul i32 %sum, 1000000\n"
         "  %x = alloca float\n"
         "  store float 3.141590e+00, float* %x\n"

@@ -652,7 +652,7 @@ TEST_F(InstCombineTest, NotConstantFolding) {
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_not_const() {
 entry:
-  %not = !2863311530
+  %not = !-1431655766
   ret i1 %not
 }
 )");
@@ -666,7 +666,7 @@ entry:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_not_const() {
 entry:
-  ret i32 -2863311531
+  ret i32 1431655765
 }
 )");
 }
@@ -874,8 +874,8 @@ TEST_F(InstCombineTest, BitwiseConstantFolding) {
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_bitwise_const() {
 entry:
-  %0 = and i32 4042322160, 252645135
-  %1 = or i32 4042322160, 252645135
+  %0 = and i32 -252645136, 252645135
+  %1 = or i32 -252645136, 252645135
   %2 = xor i32 %0, %1
   ret i32 %2
 }
@@ -893,7 +893,7 @@ entry:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_bitwise_const() {
 entry:
-  ret i32 4294967295
+  ret i32 -1
 }
 )");
 }

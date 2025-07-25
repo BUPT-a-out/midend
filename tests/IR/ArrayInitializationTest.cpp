@@ -508,3 +508,78 @@ TEST(ArrayInitializationTest, GEPStrideCalculation) {
     EXPECT_EQ(strides3[1], 16);  // [4 x i32] = 16 bytes
     EXPECT_EQ(strides3[2], 4);   // i32 = 4 bytes
 }
+
+TEST(ArrayInitializationTest, FourCubedArrayGEPTest) {
+    auto context = std::make_unique<Context>();
+    auto module = std::make_unique<Module>("4x4x4_gep_test", context.get());
+    auto* int32Ty = context->getInt32Type();
+
+    // Create 4x4x4 array: [4 x [4 x [4 x int]]]
+    auto* arr1DTy = ArrayType::get(int32Ty, 4);  // [4 x i32]
+    auto* arr2DTy = ArrayType::get(arr1DTy, 4);  // [4 x [4 x i32]]
+    auto* arr3DTy = ArrayType::get(arr2DTy, 4);  // [4 x [4 x [4 x i32]]]
+
+    // Create flat array type: [64 x i32] (4*4*4 = 64 elements)
+    auto* flatArrayTy = ArrayType::get(int32Ty, 64);  // [64 x i32]
+
+    // Create single global array with 3D layout
+    auto* array =
+        GlobalVariable::Create(arr3DTy, false, GlobalVariable::ExternalLinkage,
+                               nullptr, "array", module.get());
+
+    // Create test function
+    auto* funcTy = FunctionType::get(int32Ty, {});
+    auto* testFunc = Function::Create(funcTy, "test_4x4x4_gep", module.get());
+    auto* bb = BasicBlock::Create(context.get(), "entry", testFunc);
+    IRBuilder builder(bb);
+
+    // Access array[3][2][1] using multi-dimensional GEP with [4 x [4 x [4 x
+    // i32]]] type
+    auto* aPtr = builder.createGEP(
+        arr3DTy, array,
+        {ConstantInt::get(int32Ty, 3), ConstantInt::get(int32Ty, 2),
+         ConstantInt::get(int32Ty, 1)},
+        "a.3.2.1.ptr");
+    auto* aVal = builder.createLoad(aPtr, "a.3.2.1");
+
+    // Access the same array as b[57] using single-index GEP with [64 x i32]
+    // type Index 57 corresponds to [3][2][1] in flattened form: 3*16 + 2*4 + 1
+    // = 57
+    auto* bPtr = builder.createGEP(flatArrayTy, array,
+                                   {ConstantInt::get(int32Ty, 57)}, "b.57.ptr");
+    auto* bVal = builder.createLoad(bPtr, "b.57");
+
+    // Add the two values and return
+    auto* result = builder.createAdd(aVal, bVal, "result");
+    builder.createRet(result);
+
+    // Verify the module structure
+    EXPECT_EQ(module->globals().size(), 1);  // single array
+    EXPECT_EQ(module->size(), 1);            // test function
+
+    // Verify sizes
+    EXPECT_EQ(aPtr->getSourceElementType()->getSizeInBytes(), 256);
+    EXPECT_EQ(bPtr->getSourceElementType()->getSizeInBytes(), 256);
+
+    // Verify array type
+    auto* arrayType = dyn_cast<ArrayType>(array->getValueType());
+    ASSERT_NE(arrayType, nullptr);
+    EXPECT_EQ(arrayType->getNumElements(), 4);
+
+    EXPECT_EQ(IRPrinter::toString(module.get()),
+              R"(; ModuleID = '4x4x4_gep_test'
+
+@array = external global [4 x [4 x [4 x i32]]]
+
+define i32 @test_4x4x4_gep() {
+entry:
+  %a.3.2.1.ptr = getelementptr [4 x [4 x [4 x i32]]], [4 x [4 x [4 x i32]]]* @array, i32 3, i32 2, i32 1
+  %a.3.2.1 = load i32, i32* %a.3.2.1.ptr
+  %b.57.ptr = getelementptr [64 x i32], [4 x [4 x [4 x i32]]]* @array, i32 57
+  %b.57 = load i32, i32* %b.57.ptr
+  %result = add i32 %a.3.2.1, %b.57
+  ret i32 %result
+}
+
+)");
+}

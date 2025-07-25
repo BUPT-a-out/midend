@@ -41,7 +41,7 @@ class ConstantInt : public Constant {
     bool isOne() const { return value_ == 1; }
     bool isTrue() const { return value_ != 0; }
     bool isFalse() const { return value_ == 0; }
-    bool isNegative() const { return static_cast<int64_t>(value_) < 0; }
+    bool isNegative() const { return static_cast<int32_t>(value_) < 0; }
 
     std::string toString() const override { return std::to_string(value_); }
 

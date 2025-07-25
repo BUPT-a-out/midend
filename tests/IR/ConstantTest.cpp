@@ -201,9 +201,9 @@ TEST_F(ConstantTest, ConstantStringRepresentations) {
     auto* constInt = ConstantInt::get(int32Ty, 42);
     EXPECT_EQ(constInt->toString(), "42");
 
-    auto* constNegInt = ConstantInt::get(int32Ty, static_cast<uint64_t>(-1));
+    auto* constNegInt = ConstantInt::get(int32Ty, static_cast<uint32_t>(-1));
     EXPECT_EQ(constNegInt->toString(),
-              std::to_string(static_cast<uint64_t>(-1)));
+              std::to_string(static_cast<uint32_t>(-1)));
 
     // Test ConstantFP toString
     auto* constFloat = ConstantFP::get(floatTy, 3.14159f);
