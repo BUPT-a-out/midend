@@ -10,7 +10,7 @@ static std::map<std::pair<FloatType*, float>, ConstantFP*> fpCache;
 static std::map<PointerType*, ConstantPointerNull*> nullPtrCache;
 static std::map<Type*, UndefValue*> undefCache;
 
-ConstantInt* ConstantInt::get(IntegerType* ty, uint64_t val) {
+ConstantInt* ConstantInt::get(IntegerType* ty, uint32_t val) {
     auto key = std::make_pair(ty, val);
     auto it = integerCache.find(key);
     if (it != integerCache.end()) {
@@ -21,7 +21,7 @@ ConstantInt* ConstantInt::get(IntegerType* ty, uint64_t val) {
     return constant;
 }
 
-ConstantInt* ConstantInt::get(Context* ctx, unsigned bitWidth, uint64_t val) {
+ConstantInt* ConstantInt::get(Context* ctx, unsigned bitWidth, uint32_t val) {
     return get(ctx->getIntegerType(bitWidth), val);
 }
 
