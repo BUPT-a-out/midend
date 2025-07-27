@@ -20,6 +20,10 @@ bool isUnconditional(const BranchInst* br) {
 }
 
 bool SimplifyCFGPass::runOnFunction(Function& function, AnalysisManager&) {
+    if (function.isDeclaration()) {
+        return false;
+    }
+
     init();
 
     bool overallChanged = false;

@@ -1,6 +1,7 @@
 #include "Pass/Transform/ADCEPass.h"
 
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 #include "IR/BasicBlock.h"
@@ -15,6 +16,10 @@
 namespace midend {
 
 bool ADCEPass::runOnFunction(Function& function, AnalysisManager& am) {
+    if (function.isDeclaration()) {
+        return false;
+    }
+
     init();
 
     // Get post-dominance information
@@ -93,7 +98,13 @@ void ADCEPass::markLive(Instruction* inst) {
     markLive(BBInfo);
 }
 
-void ADCEPass::markLive(BasicBlock* block) { markLive(BlockInfo_[block]); }
+void ADCEPass::markLive(BasicBlock* block) {
+    if (!block) {
+        throw std::runtime_error(
+            "ADCEPass: Attempting to mark null BasicBlock as live");
+    }
+    markLive(BlockInfo_[block]);
+}
 
 void ADCEPass::markLive(BlockInfoType& blockInfo) {
     if (blockInfo.Live) {
@@ -125,6 +136,13 @@ void ADCEPass::markPhiLive(Instruction* phi) {
     // which will trigger marking live branches upon which
     // that block is control dependent.
     for (auto* PredBB : phi->getParent()->getPredecessors()) {
+        if (!PredBB) {
+            throw std::runtime_error(
+                "ADCEPass: Found null predecessor block for PHI node in "
+                "block " +
+                phi->getParent()->getName() + " in function " +
+                phi->getParent()->getParent()->getName());
+        }
         auto& PredInfo = BlockInfo_[PredBB];
         if (!PredInfo.CFLive) {
             PredInfo.CFLive = true;
@@ -189,6 +207,12 @@ void ADCEPass::initialize(Function& function) {
     // Build initial collection of blocks with dead terminators
     for (auto& BBInfoPair : BlockInfo_) {
         if (!BBInfoPair.second.terminatorIsLive()) {
+            if (!BBInfoPair.second.BB) {
+                throw std::runtime_error(
+                    "ADCEPass: Found BlockInfo entry with null BB pointer. " +
+                    std::string("This indicates invalid IR or a bug in pass "
+                                "initialization."));
+            }
             BlocksWithDeadTerminators_.insert(BBInfoPair.second.BB);
         }
     }
@@ -253,6 +277,12 @@ void ADCEPass::updateDeadRegions(Function& function) {
     bool changed = false;
 
     for (auto* BB : BlocksWithDeadTerminators_) {
+        if (!BB) {
+            throw std::runtime_error(
+                "ADCEPass: Found null basic block in "
+                "BlocksWithDeadTerminators_ set");
+        }
+
         auto& Info = BlockInfo_[BB];
 
         // Skip if this is an unconditional branch
@@ -272,6 +302,13 @@ void ADCEPass::updateDeadRegions(Function& function) {
         // Find the successor closest to the function exit
         BlockInfoType* PreferredSucc = nullptr;
         for (auto* Succ : BB->getSuccessors()) {
+            if (!Succ) {
+                throw std::runtime_error(
+                    "ADCEPass: Found null successor block for block " +
+                    BB->getName() + " in function " + function.getName() +
+                    ". This indicates invalid branch instruction or corrupted "
+                    "IR.");
+            }
             auto* SuccInfo = &BlockInfo_[Succ];
             if (!PreferredSucc ||
                 PreferredSucc->PostOrder > SuccInfo->PostOrder) {

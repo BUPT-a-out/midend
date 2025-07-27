@@ -12,6 +12,9 @@
 namespace midend {
 
 bool InstCombinePass::runOnFunction(Function& function, AnalysisManager&) {
+    if (function.isDeclaration()) {
+        return false;
+    }
     return combineInstructions(function);
 }
 

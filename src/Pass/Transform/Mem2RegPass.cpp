@@ -11,6 +11,10 @@
 namespace midend {
 
 bool Mem2RegContext::runOnFunction(Function& function, AnalysisManager& am) {
+    if (function.isDeclaration()) {
+        return false;
+    }
+
     if (function.empty()) return false;
 
     dominanceInfo_ =
