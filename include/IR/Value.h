@@ -132,6 +132,7 @@ class Use {
     Value* get() const { return value_; }
     User* getUser() const { return user_; }
     unsigned getOperandNo() const { return operandNo_; }
+    void setOperandNo(unsigned opNo) { operandNo_ = opNo; }
 
     void set(Value* v) {
         if (value_) {
@@ -187,6 +188,18 @@ class User : public Value {
 
     void addOperand(Value* v) {
         operands_.push_back(std::make_unique<Use>(v, this, operands_.size()));
+    }
+
+    void removeOperand(unsigned index) {
+        if (index >= operands_.size()) return;
+
+        operands_[index]->set(nullptr);
+
+        operands_.erase(operands_.begin() + index);
+
+        for (unsigned i = index; i < operands_.size(); ++i) {
+            operands_[i]->setOperandNo(i);
+        }
     }
 
     void dropAllReferences() {

@@ -32,6 +32,7 @@ class SimplifyCFGPass : public FunctionPass {
     bool removeUnreachableBlocks(Function& function);
     bool mergeBlocks(Function& function);
     bool eliminateEmptyBlocks(Function& function);
+    bool convertConstantConditionalBranches(Function& function);
     bool removeDuplicatePHINodes(Function& function);
 
     std::unordered_set<BasicBlock*> findUnreachableBlocks(Function& function);

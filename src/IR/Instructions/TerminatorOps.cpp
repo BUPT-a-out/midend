@@ -96,6 +96,16 @@ Value* PHINode::getIncomingValueForBlock(const BasicBlock* bb) const {
     return idx >= 0 ? getIncomingValue(idx) : nullptr;
 }
 
+void PHINode::deleteIncoming(BasicBlock* bb) {
+    int idx = getBasicBlockIndex(bb);
+    if (idx < 0) return;
+
+    unsigned deleteIdx = static_cast<unsigned>(idx);
+
+    removeOperand(deleteIdx * 2);
+    removeOperand(deleteIdx * 2);
+}
+
 Instruction* PHINode::clone() const {
     auto* newPhi = Create(getType(), getName());
     for (unsigned i = 0; i < getNumIncomingValues(); ++i) {

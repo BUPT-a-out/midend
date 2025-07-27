@@ -153,6 +153,8 @@ class PHINode : public Instruction {
     int getBasicBlockIndex(const BasicBlock* bb) const;
     Value* getIncomingValueForBlock(const BasicBlock* bb) const;
 
+    void deleteIncoming(BasicBlock* bb);
+
     Instruction* clone() const override;
 
     static bool classof(const Value* v) {

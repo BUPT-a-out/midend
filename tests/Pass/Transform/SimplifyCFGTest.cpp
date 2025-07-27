@@ -1106,3 +1106,136 @@ TEST_F(SimplifyCFGTest, IterativeOptimization_CreateNewOpportunities) {
               "  ret i32 %val2\n"
               "}\n");
 }
+
+TEST_F(SimplifyCFGTest, NestedConditionalWithPhi) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto mainEntry = BasicBlock::Create(ctx.get(), "main.entry", func);
+    auto ififElseEntry =
+        BasicBlock::Create(ctx.get(), "ififElse.entry.inline1", func);
+    auto if0Then = BasicBlock::Create(ctx.get(), "if.0.then.inline1", func);
+    auto if1Then = BasicBlock::Create(ctx.get(), "if.1.then.inline1", func);
+    auto if1Else = BasicBlock::Create(ctx.get(), "if.1.else.inline1", func);
+    auto if1Merge = BasicBlock::Create(ctx.get(), "if.1.merge.inline1", func);
+    auto if0Merge = BasicBlock::Create(ctx.get(), "if.0.merge.inline1", func);
+    auto mainEntryAfter =
+        BasicBlock::Create(ctx.get(), "main.entry.inline1_after", func);
+
+    builder->setInsertPoint(mainEntry);
+    builder->createBr(ififElseEntry);
+
+    builder->setInsertPoint(ififElseEntry);
+    builder->createCondBr(builder->getInt1(true), if0Then, if0Merge);
+
+    builder->setInsertPoint(if0Then);
+    builder->createCondBr(builder->getInt1(true), if1Then, if1Else);
+
+    builder->setInsertPoint(if1Then);
+    builder->createBr(if1Merge);
+
+    builder->setInsertPoint(if1Else);
+    builder->createBr(if1Merge);
+
+    builder->setInsertPoint(if1Merge);
+    auto phi1 = builder->createPHI(intType, "a.25.phi.1");
+    phi1->addIncoming(builder->getInt32(25), if1Then);
+    phi1->addIncoming(builder->getInt32(20), if1Else);
+    builder->createBr(if0Merge);
+
+    builder->setInsertPoint(if0Merge);
+    auto phi2 = builder->createPHI(intType, "a.25.phi.2");
+    phi2->addIncoming(phi1, if1Merge);
+    phi2->addIncoming(builder->getInt32(5), ififElseEntry);
+    builder->createBr(mainEntryAfter);
+
+    builder->setInsertPoint(mainEntryAfter);
+    auto phi3 = builder->createPHI(intType, "");
+    phi3->addIncoming(phi2, if0Merge);
+    builder->createRet(phi3);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              "define i32 @main() {\n"
+              "main.entry:\n"
+              "  br label %ififElse.entry.inline1\n"
+              "ififElse.entry.inline1:\n"
+              "  br i1 1, label %if.0.then.inline1, label %if.0.merge.inline1\n"
+              "if.0.then.inline1:\n"
+              "  br i1 1, label %if.1.then.inline1, label %if.1.else.inline1\n"
+              "if.1.then.inline1:\n"
+              "  br label %if.1.merge.inline1\n"
+              "if.1.else.inline1:\n"
+              "  br label %if.1.merge.inline1\n"
+              "if.1.merge.inline1:\n"
+              "  %a.25.phi.1 = phi i32 [ 25, %if.1.then.inline1 ], [ 20, "
+              "%if.1.else.inline1 ]\n"
+              "  br label %if.0.merge.inline1\n"
+              "if.0.merge.inline1:\n"
+              "  %a.25.phi.2 = phi i32 [ %a.25.phi.1, %if.1.merge.inline1 ], [ "
+              "5, %ififElse.entry.inline1 ]\n"
+              "  br label %main.entry.inline1_after\n"
+              "main.entry.inline1_after:\n"
+              "  %0 = phi i32 [ %a.25.phi.2, %if.0.merge.inline1 ]\n"
+              "  ret i32 %0\n"
+              "}\n");
+
+    SimplifyCFGPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @main() {
+main.entry:
+  ret i32 25
+}
+)");
+}
+
+TEST_F(SimplifyCFGTest, ConvertConstantConditionalBranch) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto mainEntry = BasicBlock::Create(ctx.get(), "main.entry", func);
+    auto ifThen = BasicBlock::Create(ctx.get(), "if.1.then.inline1", func);
+    auto ifMerge = BasicBlock::Create(ctx.get(), "if.0.merge.inline1", func);
+
+    builder->setInsertPoint(mainEntry);
+    builder->createCondBr(builder->getInt1(true), ifThen, ifMerge);
+
+    builder->setInsertPoint(ifThen);
+    builder->createBr(ifMerge);
+
+    builder->setInsertPoint(ifMerge);
+    auto phi = builder->createPHI(intType, "a.25.phi.2");
+    phi->addIncoming(builder->getInt32(25), ifThen);
+    phi->addIncoming(builder->getInt32(5), mainEntry);
+    builder->createRet(phi);
+
+    std::string beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(beforeIR,
+              "define i32 @main() {\n"
+              "main.entry:\n"
+              "  br i1 1, label %if.1.then.inline1, label %if.0.merge.inline1\n"
+              "if.1.then.inline1:\n"
+              "  br label %if.0.merge.inline1\n"
+              "if.0.merge.inline1:\n"
+              "  %a.25.phi.2 = phi i32 [ 25, %if.1.then.inline1 ], [ 5, "
+              "%main.entry ]\n"
+              "  ret i32 %a.25.phi.2\n"
+              "}\n");
+
+    SimplifyCFGPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    EXPECT_TRUE(changed);
+
+    std::string afterIR = IRPrinter().print(func);
+
+    EXPECT_EQ(afterIR,
+              "define i32 @main() {\n"
+              "main.entry:\n"
+              "  ret i32 25\n"
+              "}\n");
+}

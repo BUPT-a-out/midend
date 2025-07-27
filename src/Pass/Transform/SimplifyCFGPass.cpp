@@ -19,6 +19,50 @@ bool isUnconditional(const BranchInst* br) {
            br->isSameTarget();
 }
 
+bool SimplifyCFGPass::convertConstantConditionalBranches(Function& function) {
+    bool changed = false;
+
+    for (auto* block : function) {
+        auto* terminator = block->getTerminator();
+        if (!terminator) continue;
+
+        auto* branch = dyn_cast<BranchInst>(terminator);
+        if (!branch || !branch->isConstantUnconditional()) continue;
+
+        auto* constantCond = cast<ConstantInt>(branch->getCondition());
+        BasicBlock* targetBB =
+            constantCond->isZero() ? branch->getFalseBB() : branch->getTrueBB();
+        BasicBlock* deadBB =
+            constantCond->isZero() ? branch->getTrueBB() : branch->getFalseBB();
+
+        // Remove PHI incoming values from the dead edge
+        if (deadBB) {
+            for (auto& inst : *deadBB) {
+                if (auto* phi = dyn_cast<PHINode>(inst)) {
+                    phi->deleteIncoming(block);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        BranchInst* newBranch = BranchInst::Create(targetBB);
+
+        branch->replaceAllUsesWith(newBranch);
+        newBranch->insertBefore(branch);
+        branch->eraseFromParent();
+
+        targetBB->invalidatePredecessorCache();
+        if (deadBB) {
+            deadBB->invalidatePredecessorCache();
+        }
+
+        changed = true;
+    }
+
+    return changed;
+}
+
 bool SimplifyCFGPass::runOnFunction(Function& function, AnalysisManager&) {
     if (function.isDeclaration()) {
         return false;
@@ -30,7 +74,8 @@ bool SimplifyCFGPass::runOnFunction(Function& function, AnalysisManager&) {
     bool iterChanged = true;
 
     while (iterChanged) {
-        iterChanged = removeUnreachableBlocks(function);
+        iterChanged = convertConstantConditionalBranches(function);
+        iterChanged |= removeUnreachableBlocks(function);
         iterChanged |= mergeBlocks(function);
         iterChanged |= eliminateEmptyBlocks(function);
         iterChanged |= removeDuplicatePHINodes(function);
@@ -53,6 +98,17 @@ bool SimplifyCFGPass::removeUnreachableBlocks(Function& function) {
             inst.dropAllReferences();
             inst.eraseFromParent();
         }
+        block->replaceAllUsesBy([&](Use*& use) {
+            auto user = use->getUser();
+            if (auto phi = dyn_cast<PHINode>(user)) {
+                phi->deleteIncoming(block);
+            } else {
+                std::cerr << "Warning: Unreachable block " << block->getName()
+                          << " has users that are not PHI nodes. "
+                             "This may lead to undefined behavior."
+                          << std::endl;
+            }
+        });
         block->eraseFromParent();
     }
     return true;
@@ -88,6 +144,28 @@ std::unordered_set<BasicBlock*> SimplifyCFGPass::findUnreachableBlocks(
     return unreachableBlocks;
 }
 
+bool removeUnreachablePhiIncomingEdges(Function& func) {
+    bool changed = false;
+
+    for (auto* block : func) {
+        for (auto& inst : *block) {
+            if (auto* phi = dyn_cast<PHINode>(inst)) {
+                for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
+                    auto incoming = phi->getIncomingBlock(i);
+                    auto succ = incoming->getSuccessors();
+                    if (std::find(succ.begin(), succ.end(), block) ==
+                        succ.end()) {
+                        phi->deleteIncoming(incoming);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    return changed;
+}
+
 bool SimplifyCFGPass::mergeBlocks(Function& function) {
     bool changed = false;
     std::vector<BasicBlock*> blocksToProcess;
@@ -100,6 +178,7 @@ bool SimplifyCFGPass::mergeBlocks(Function& function) {
 
     for (auto* block : blocksToProcess) {
         mergeBlockIntoPredecessor(block);
+        changed |= removeUnreachablePhiIncomingEdges(function);
         changed = true;
     }
 
