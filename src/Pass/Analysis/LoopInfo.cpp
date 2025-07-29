@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <stack>
 
 #include "Pass/Analysis/DominanceInfo.h"
@@ -212,7 +213,7 @@ void LoopInfo::discoverLoops() {
     auto backEdges = findBackEdges();
 
     // Group backedges by header
-    std::unordered_map<BasicBlock*, std::vector<BasicBlock*>> headerToLatches;
+    std::map<BasicBlock*, std::vector<BasicBlock*>> headerToLatches;
     for (const auto& [latch, header] : backEdges) {
         headerToLatches[header].push_back(latch);
     }
@@ -394,8 +395,7 @@ void LoopInfo::print() const {
 }
 
 std::unique_ptr<AnalysisResult> LoopAnalysis::runOnFunction(Function& f) {
-    auto domInfo = std::make_unique<DominanceInfo>(&f);
-    return std::make_unique<LoopInfo>(&f, domInfo.get());
+    return std::make_unique<LoopInfo>(&f, new DominanceInfo(&f));
 }
 
 std::unique_ptr<AnalysisResult> LoopAnalysis::runOnFunction(
