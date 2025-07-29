@@ -35,6 +35,18 @@ class Analysis {
         return nullptr;
     }
 
+    virtual std::unique_ptr<AnalysisResult> runOnFunction(Function& f,
+                                                          AnalysisManager& AM) {
+        (void)AM;
+        return runOnFunction(f);
+    }
+
+    virtual std::unique_ptr<AnalysisResult> runOnModule(Module& m,
+                                                        AnalysisManager& AM) {
+        (void)AM;
+        return runOnModule(m);
+    }
+
     virtual bool supportsFunction() const { return false; }
 
     virtual bool supportsModule() const { return false; }

@@ -217,7 +217,7 @@ bool AnalysisManager::computeAnalysis(const std::string& name, Function& f) {
         }
     }
 
-    auto result = analysis->runOnFunction(f);
+    auto result = analysis->runOnFunction(f, *this);
     if (!result) {
         return false;
     }
@@ -245,7 +245,7 @@ bool AnalysisManager::computeAnalysis(const std::string& name, Module& m) {
         }
     }
 
-    auto result = analysis->runOnModule(m);
+    auto result = analysis->runOnModule(m, *this);
     if (!result) {
         return false;
     }
