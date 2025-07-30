@@ -111,6 +111,7 @@ class Instruction : public User {
 
     bool isBinaryOp() const {
         return (opcode_ >= Opcode::Add && opcode_ <= Opcode::Shr) ||
+               (opcode_ >= Opcode::FAdd && opcode_ <= Opcode::FDiv) ||
                (opcode_ >= Opcode::LAnd && opcode_ <= Opcode::LOr);
     }
 
