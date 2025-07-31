@@ -58,10 +58,11 @@ void Module::remove(Function* fn) {
     fn->setParent(nullptr);
 }
 
-void Module::addGlobalVariable(GlobalVariable* gv) {
+GlobalVariable* Module::addGlobalVariable(GlobalVariable* gv) {
     globals_.push_back(gv);
     gv->setParent(this);
     gv->setIterator(std::prev(globals_.end()));
+    return gv;
 }
 
 void Module::removeGlobalVariable(GlobalVariable* gv) {

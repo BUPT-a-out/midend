@@ -122,7 +122,7 @@ class Module {
     iterator erase(iterator pos);
     void remove(Function* fn);
 
-    void addGlobalVariable(GlobalVariable* gv);
+    GlobalVariable* addGlobalVariable(GlobalVariable* gv);
     void removeGlobalVariable(GlobalVariable* gv);
 
     Function* getFunction(const std::string& name) const;
