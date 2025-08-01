@@ -13,6 +13,8 @@
 
 namespace midend {
 
+static int tail_recursion_loop_cnt = 0;
+
 bool TailRecursionOptimizationPass::runOnFunction(Function& function,
                                                   AnalysisManager&) {
     if (!function.isDefinition()) {
@@ -137,8 +139,9 @@ bool TailRecursionOptimizationPass::transformToLoop(
 
 BasicBlock* TailRecursionOptimizationPass::createLoopHeader(
     Function& function) {
-    auto* loopHeader =
-        BasicBlock::Create(function.getContext(), "tail_recursion_loop");
+    auto* loopHeader = BasicBlock::Create(
+        function.getContext(),
+        "tail_recursion_loop." + std::to_string(++tail_recursion_loop_cnt));
     auto insertPos = std::next(function.begin());
     function.insert(insertPos, loopHeader);
     return loopHeader;

@@ -78,8 +78,8 @@ recursive:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @factorial(i32 %n, i32 %acc) {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %n.phi = phi i32 [ %n, %entry ], [ %0, %recursive ]
   %acc.phi = phi i32 [ %acc, %entry ], [ %1, %recursive ]
   %2 = icmp sle i32 %n.phi, 1
@@ -89,7 +89,7 @@ base:
 recursive:
   %0 = sub i32 %n.phi, 1
   %1 = mul i32 %acc.phi, %n.phi
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 }
 )");
 }
@@ -142,8 +142,8 @@ recursive:
     // Check IR after optimization
     EXPECT_EQ(IRPrinter().print(func), R"(define void @countdown(i32 %n) {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %n.phi = phi i32 [ %n, %entry ], [ %0, %recursive ]
   %1 = icmp sle i32 %n.phi, 0
   br i1 %1, label %base, label %recursive
@@ -151,7 +151,7 @@ base:
   ret void
 recursive:
   %0 = sub i32 %n.phi, 1
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 }
 )");
 }
@@ -441,8 +441,8 @@ recursive:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @three_param(i32 %a, i32 %b, i32 %c) {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %a.phi = phi i32 [ %a, %entry ], [ %0, %recursive ]
   %b.phi = phi i32 [ %b, %entry ], [ %1, %recursive ]
   %c.phi = phi i32 [ %c, %entry ], [ %2, %recursive ]
@@ -454,7 +454,7 @@ recursive:
   %0 = sub i32 %a.phi, 1
   %1 = add i32 %b.phi, %c.phi
   %2 = mul i32 %c.phi, 2
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 }
 )");
 }
@@ -502,14 +502,14 @@ recursive:
     // Check IR after optimization
     EXPECT_EQ(IRPrinter().print(func), R"(define i32 @no_param() {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %0 = icmp sle i32 0, 0
   br i1 %0, label %base, label %recursive
 base:
   ret i32 42
 recursive:
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 }
 )");
 }
@@ -636,8 +636,8 @@ dispatch:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @multi_branch(i32 %n, i32 %acc) {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %n.phi = phi i32 [ %n, %entry ], [ %0, %even ], [ %1, %odd ]
   %acc.phi = phi i32 [ %acc, %entry ], [ %2, %even ], [ %3, %odd ]
   %4 = icmp sle i32 %n.phi, 1
@@ -647,11 +647,11 @@ base:
 even:
   %0 = sub i32 %n.phi, 1
   %2 = add i32 %acc.phi, %n.phi
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 odd:
   %1 = sub i32 %n.phi, 2
   %3 = mul i32 %acc.phi, 2
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 dispatch:
   %5 = srem i32 %n.phi, 2
   %6 = icmp eq i32 %5, 0
@@ -823,8 +823,8 @@ right:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @multi_tail(i32 %n, i32 %acc) {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %n.phi = phi i32 [ %n, %entry ], [ %0, %left ], [ %1, %right ]
   %acc.phi = phi i32 [ %acc, %entry ], [ %2, %left ], [ %3, %right ]
   %4 = icmp sle i32 %n.phi, 1
@@ -838,11 +838,11 @@ exit:
 left:
   %0 = sub i32 %n.phi, 1
   %2 = add i32 %acc.phi, %n.phi
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 right:
   %1 = sub i32 %n.phi, 2
   %3 = mul i32 %acc.phi, 2
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 }
 )");
 }
@@ -920,14 +920,14 @@ exit:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @loop_tail(i32 %n, i32 %acc) {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %n.phi = phi i32 [ %n, %entry ], [ %0, %recursive ]
   %acc.phi = phi i32 [ %acc, %entry ], [ %1, %recursive ]
   %2 = icmp sle i32 %n.phi, 1
   br i1 %2, label %exit, label %loop
 loop:
-  %3 = phi i32 [ 0, %tail_recursion_loop ], [ %4, %loop_body ]
+  %3 = phi i32 [ 0, %tail_recursion_loop.1 ], [ %4, %loop_body ]
   %5 = icmp slt i32 %3, 3
   br i1 %5, label %loop_body, label %recursive
 loop_body:
@@ -936,7 +936,7 @@ loop_body:
 recursive:
   %0 = sub i32 %n.phi, 1
   %1 = add i32 %acc.phi, %3
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 exit:
   ret i32 %acc.phi
 }
@@ -1040,8 +1040,8 @@ call:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @complex_ret(i32 %n, i32 %acc) {
 entry:
-  br label %tail_recursion_loop
-tail_recursion_loop:
+  br label %tail_recursion_loop.1
+tail_recursion_loop.1:
   %n.phi = phi i32 [ %n, %entry ], [ %0, %call ]
   %acc.phi = phi i32 [ %acc, %entry ], [ %1, %call ]
   %2 = icmp sle i32 %n.phi, 0
@@ -1067,7 +1067,7 @@ odd:
 call:
   %1 = phi i32 [ %7, %even ], [ %8, %odd ]
   %0 = sub i32 %n.phi, 1
-  br label %tail_recursion_loop
+  br label %tail_recursion_loop.1
 }
 )");
 }

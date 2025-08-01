@@ -455,7 +455,6 @@ entry:
         "instcombine,strengthreduce,adce,simplifycfg");
     bool modified = passManager.run(module);
     EXPECT_TRUE(modified);
-    std::cout << IRPrinter().print(&module) << std::endl;
 }
 
 }  // namespace
