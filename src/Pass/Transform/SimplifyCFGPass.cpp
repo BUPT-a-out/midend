@@ -295,30 +295,57 @@ bool SimplifyCFGPass::eliminateEmptyBlocks(Function& function) {
                 continue;
             }
 
-            for (auto predecessor : block->getPredecessors()) {
-                if (auto* branch =
-                        dyn_cast<BranchInst>(block->getTerminator())) {
-                    auto* target = branch->getTargetBB();
-                    if (target) {
-                        auto successors = block->getSuccessors();
-                        block->replaceAllUsesBy([&](Use*& use) {
-                            auto user = use->getUser();
-                            if (isa<BranchInst>(user)) {
-                                use->set(target);
-                            } else {
-                                use->set(predecessor);
-                            }
-                        });
-                        block->replaceAllUsesWith(target);
-                        block->eraseFromParent();
-                        for (auto* succ : successors) {
-                            succ->invalidatePredecessorCache();
+            // Get the target of the empty block's branch
+            auto* emptyBlockBranch = dyn_cast<BranchInst>(block->getTerminator());
+            if (!emptyBlockBranch) {
+                continue;
+            }
+            auto* target = emptyBlockBranch->getTargetBB();
+            if (!target) {
+                continue;
+            }
+
+            auto successors = block->getSuccessors();
+            auto predecessors = block->getPredecessors();
+            
+            // Handle only simple cases to avoid complexity issues
+            if (predecessors.size() != 1) {
+                continue; // Skip complex cases with multiple predecessors
+            }
+
+            // Collect all uses before modifying to avoid iterator invalidation
+            std::vector<Use*> blockUses;
+            for (auto* use : block->users()) {
+                blockUses.push_back(use);
+            }
+            
+            // Update each use safely
+            for (auto* use : blockUses) {
+                auto* user = use->getUser();
+                if (auto* phi = dyn_cast<PHINode>(user)) {
+                    // Simple case: just update the incoming block reference
+                    for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
+                        if (phi->getIncomingBlock(i) == block) {
+                            phi->setIncomingBlock(i, predecessors[0]);
+                            break;
                         }
-                        iterChanged = true;
-                        changed = true;
+                    }
+                } else if (auto* branch = dyn_cast<BranchInst>(user)) {
+                    // Update branch targets
+                    for (unsigned i = 0; i < branch->getNumOperands(); ++i) {
+                        if (branch->getOperand(i) == block) {
+                            branch->setOperand(i, target);
+                        }
                     }
                 }
             }
+            
+            block->eraseFromParent();
+            for (auto* succ : successors) {
+                succ->invalidatePredecessorCache();
+            }
+            iterChanged = true;
+            changed = true;
         }
     }
 
