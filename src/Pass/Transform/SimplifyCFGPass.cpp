@@ -296,7 +296,8 @@ bool SimplifyCFGPass::eliminateEmptyBlocks(Function& function) {
             }
 
             // Get the target of the empty block's branch
-            auto* emptyBlockBranch = dyn_cast<BranchInst>(block->getTerminator());
+            auto* emptyBlockBranch =
+                dyn_cast<BranchInst>(block->getTerminator());
             if (!emptyBlockBranch) {
                 continue;
             }
@@ -307,10 +308,10 @@ bool SimplifyCFGPass::eliminateEmptyBlocks(Function& function) {
 
             auto successors = block->getSuccessors();
             auto predecessors = block->getPredecessors();
-            
+
             // Handle only simple cases to avoid complexity issues
             if (predecessors.size() != 1) {
-                continue; // Skip complex cases with multiple predecessors
+                continue;  // Skip complex cases with multiple predecessors
             }
 
             // Collect all uses before modifying to avoid iterator invalidation
@@ -318,7 +319,7 @@ bool SimplifyCFGPass::eliminateEmptyBlocks(Function& function) {
             for (auto* use : block->users()) {
                 blockUses.push_back(use);
             }
-            
+
             // Update each use safely
             for (auto* use : blockUses) {
                 auto* user = use->getUser();
@@ -339,7 +340,7 @@ bool SimplifyCFGPass::eliminateEmptyBlocks(Function& function) {
                     }
                 }
             }
-            
+
             block->eraseFromParent();
             for (auto* succ : successors) {
                 succ->invalidatePredecessorCache();

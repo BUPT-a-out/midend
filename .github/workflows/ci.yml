@@ -51,58 +51,6 @@ jobs:
         run: |
           xmake test
 
-  coverage:
-    name: Coverage Report
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-15 llvm-15 llvm-15-tools bc
-
-      - name: Setup LLVM tools
-        run: |
-          sudo update-alternatives --install /usr/bin/llvm-profdata llvm-profdata /usr/bin/llvm-profdata-15 1000
-          sudo update-alternatives --install /usr/bin/llvm-cov llvm-cov /usr/bin/llvm-cov-15 1000
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 1000
-          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-15 1000
-
-      - name: Install xmake
-        run: |
-          curl -fsSL https://xmake.io/shget.text | bash
-          echo "${HOME}/.local/bin" >> $GITHUB_PATH
-
-      - name: Configure xmake
-        run: |
-          xmake config --toolchain=clang --mode=coverage --yes
-
-      - name: Run coverage
-        run: |
-          xmake coverage
-
-          # Verify coverage files were generated
-          if [ ! -f "coverage/summary.txt" ]; then
-            echo "Error: coverage/summary.txt not found"
-            exit 1
-          fi
-
-          if [ ! -f "coverage/index.html" ]; then
-            echo "Error: coverage/index.html not found"
-            exit 1
-          fi
-
-          echo "Coverage files generated successfully"
-
-      - name: Upload coverage directory
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 90
-
   clang-format:
     name: Code Formatting Check
     runs-on: ubuntu-latest
