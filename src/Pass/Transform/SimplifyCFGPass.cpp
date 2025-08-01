@@ -102,11 +102,19 @@ bool SimplifyCFGPass::removeUnreachableBlocks(Function& function) {
             auto user = use->getUser();
             if (auto phi = dyn_cast<PHINode>(user)) {
                 phi->deleteIncoming(block);
+            } else if (auto br = dyn_cast<BranchInst>(user)) {
+                if (unreachableBlocks.find(br->getParent()) !=
+                    unreachableBlocks.end()) {
+                    use->set(nullptr);
+                }
             } else {
                 std::cerr << "Warning: Unreachable block " << block->getName()
-                          << " has users that are not PHI nodes. "
+                          << " has users (" << user->getName()
+                          << ") that are not PHI nodes. "
                              "This may lead to undefined behavior."
-                          << std::endl;
+                          << std::endl
+                          << "DEBUG:\n"
+                          << IRPrinter::toString(&function) << std::endl;
             }
         });
         block->eraseFromParent();
