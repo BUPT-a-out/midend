@@ -7,10 +7,18 @@
 #include "IR/Instructions/MemoryOps.h"
 #include "IR/Instructions/OtherOps.h"
 #include "IR/Module.h"
+#include "Pass/Analysis/AliasAnalysis.h"
 
 namespace midend {
 
-CallGraph::CallGraph(Module* M) : module_(M) {
+CallGraph::CallGraph(Module* M) : module_(M), analysisManager_(nullptr) {
+    buildCallGraph();
+    computeSCCs();
+    analyzeSideEffects();
+}
+
+CallGraph::CallGraph(Module* M, AnalysisManager* AM)
+    : module_(M), analysisManager_(AM) {
     buildCallGraph();
     computeSCCs();
     analyzeSideEffects();
@@ -113,9 +121,26 @@ bool CallGraph::hasSideEffectsInternal(Function* F,
     if (F->isDeclaration()) {
         hasSideEffect = true;
     } else {
+        // Get alias analysis result - use AnalysisManager if available,
+        // otherwise run directly
+        AliasAnalysis::Result* aliasInfo = nullptr;
+        std::unique_ptr<AnalysisResult> aliasResultOwner;
+
+        if (analysisManager_) {
+            aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>(
+                "AliasAnalysis", *F);
+        }
+
+        if (!aliasInfo) {
+            AliasAnalysis aliasAnalysis;
+            aliasResultOwner = aliasAnalysis.runOnFunction(*F);
+            aliasInfo =
+                static_cast<AliasAnalysis::Result*>(aliasResultOwner.get());
+        }
+
         for (BasicBlock* BB : *F) {
             for (Instruction* I : *BB) {
-                // Check for stores to global variables
+                // Check for stores to global variables or function parameters
                 if (isa<StoreInst>(I)) {
                     if (auto* store = cast<StoreInst>(I)) {
                         Value* ptr = store->getPointerOperand();
@@ -126,6 +151,15 @@ bool CallGraph::hasSideEffectsInternal(Function* F,
                         if (isa<GlobalVariable>(ptr)) {
                             hasSideEffect = true;
                             break;
+                        }
+                        for (auto it = F->arg_begin(); it != F->arg_end();
+                             ++it) {
+                            Argument* arg = it->get();
+                            if (aliasInfo->alias(arg, ptr) !=
+                                AliasAnalysis::AliasResult::NoAlias) {
+                                hasSideEffect = true;
+                                break;
+                            }
                         }
                     }
                 } else if (auto* call = dyn_cast<CallInst>(I)) {

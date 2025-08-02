@@ -229,6 +229,7 @@ class CallGraph : public AnalysisResult {
 
    private:
     Module* module_;
+    AnalysisManager* analysisManager_;
     NodeMap nodes_;
     SCCVector sccs_;
     std::unordered_map<Function*, size_t> functionToSCC_;
@@ -254,6 +255,7 @@ class CallGraph : public AnalysisResult {
 
    public:
     explicit CallGraph(Module* M);
+    explicit CallGraph(Module* M, AnalysisManager* AM);
 
     /// Get the call graph node for a function
     CallGraphNode* getNode(Function* F) const {
@@ -412,6 +414,11 @@ class CallGraphAnalysis : public AnalysisBase {
 
     std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
         return std::make_unique<CallGraph>(&m);
+    }
+
+    std::unique_ptr<AnalysisResult> runOnModule(Module& m,
+                                                AnalysisManager& AM) override {
+        return std::make_unique<CallGraph>(&m, &AM);
     }
 
     bool supportsModule() const override { return true; }
