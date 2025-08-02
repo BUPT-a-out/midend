@@ -219,6 +219,9 @@ GVNPass::Expression GVNPass::createExpression(Instruction* I) {
     } else if (auto* Cast = dyn_cast<CastInst>(I)) {
         expr.operands.push_back(getValueNumber(Cast->getOperand(0)));
     } else if (auto* GEP = dyn_cast<GetElementPtrInst>(I)) {
+        auto* resultType = GEP->getType();
+        expr.operands.push_back(reinterpret_cast<uintptr_t>(resultType));
+
         for (unsigned i = 0; i < GEP->getNumOperands(); ++i) {
             expr.operands.push_back(getValueNumber(GEP->getOperand(i)));
         }
@@ -325,10 +328,19 @@ bool GVNPass::eliminatePHIRedundancy(PHINode* PHI) {
     // Check if this PHI is equivalent to another PHI
     Expression expr;
     expr.opcode = static_cast<unsigned>(PHI->getOpcode());
+
+    std::vector<std::pair<BasicBlock*, Value*>> incomingPairs;
     for (unsigned i = 0; i < PHI->getNumIncomingValues(); ++i) {
-        expr.operands.push_back(getValueNumber(PHI->getIncomingValue(i)));
+        incomingPairs.emplace_back(PHI->getIncomingBlock(i),
+                                   PHI->getIncomingValue(i));
     }
-    std::sort(expr.operands.begin(), expr.operands.end());
+
+    std::sort(incomingPairs.begin(), incomingPairs.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    for (const auto& pair : incomingPairs) {
+        expr.operands.push_back(getValueNumber(pair.second));
+    }
 
     return eliminateRedundancy(PHI, expr);
 }

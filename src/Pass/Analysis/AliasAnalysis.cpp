@@ -28,6 +28,8 @@ AliasResult AliasAnalysis::Result::alias(const Location& loc1,
         return it->second;
     }
 
+    aliasCache[key] = AliasResult::MayAlias;
+
     auto result = aliasInternal(loc1, loc2);
 
     aliasCache[key] = result;
