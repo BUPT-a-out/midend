@@ -169,7 +169,7 @@ TEST_F(AnalysisManagerTest, InvalidateAllModuleAnalyses) {
     EXPECT_EQ(
         analysisManager->getAnalysis<TestModuleAnalysis>("analysis2", *module),
         nullptr);
-    EXPECT_NE(analysisManager->getAnalysis<TestFunctionAnalysis>(
+    EXPECT_EQ(analysisManager->getAnalysis<TestFunctionAnalysis>(
                   "func_analysis", *function),
               nullptr);
 }

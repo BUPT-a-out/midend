@@ -1140,3 +1140,115 @@ entry.inline1_after.inline2_after:
 
 )");
 }
+
+TEST_F(InlinePassTest, WhileLoopWithPhiNode) {
+    auto* i32Type = IntegerType::get(ctx, 32);
+    auto* getintType = FunctionType::get(i32Type, {});
+    auto* mainType = FunctionType::get(i32Type, {});
+
+    // Create my_getint function: i32 my_getint() { return -1; }
+    auto* my_getint = Function::Create(getintType, "my_getint", module);
+    auto* getintEntry = BasicBlock::Create(ctx, "my_getint.entry", my_getint);
+    builder->setInsertPoint(getintEntry);
+    auto* minusOne = ConstantInt::get(i32Type, -1);
+    builder->createRet(minusOne);
+
+    // Create main function with while loop:
+    // i32 main() {
+    //   %0 = call i32 @my_getint()
+    //   br label %while.0.cond
+    // while.0.cond:
+    //   %n.29.phi.1 = phi i32 [ %0, %main.entry ], [ %sub.5, %while.0.loop ]
+    //   %gt.2 = icmp sgt i32 %n.29.phi.1, 0
+    //   br i1 %gt.2, label %while.0.loop, label %while.0.merge
+    // while.0.loop:
+    //   %sub.5 = sub i32 %n.29.phi.1, 1
+    //   br label %while.0.cond
+    // while.0.merge:
+    //   ret i32 0
+    // }
+    auto* main = Function::Create(mainType, "main", module);
+    auto* mainEntry = BasicBlock::Create(ctx, "main.entry", main);
+    auto* whileCond = BasicBlock::Create(ctx, "while.0.cond", main);
+    auto* whileLoop = BasicBlock::Create(ctx, "while.0.loop", main);
+    auto* whileMerge = BasicBlock::Create(ctx, "while.0.merge", main);
+
+    builder->setInsertPoint(mainEntry);
+    auto* call = builder->createCall(my_getint, {});
+    auto* callRes =
+        builder->createAdd(call, ConstantInt::get(i32Type, 0), "call.res");
+    builder->createBr(whileCond);
+
+    builder->setInsertPoint(whileCond);
+    auto* phi = builder->createPHI(i32Type, "n.29.phi.1");
+    phi->addIncoming(callRes, mainEntry);
+    auto* zero = ConstantInt::get(i32Type, 0);
+    auto* gt2 = builder->createICmpSGT(phi, zero, "gt.2");
+    builder->createCondBr(gt2, whileLoop, whileMerge);
+
+    builder->setInsertPoint(whileLoop);
+    auto* one = ConstantInt::get(i32Type, 1);
+    auto* sub5 = builder->createSub(phi, one, "sub.5");
+    phi->addIncoming(sub5, whileLoop);
+    builder->createBr(whileCond);
+
+    builder->setInsertPoint(whileMerge);
+    builder->createRet(zero);
+
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @my_getint() {
+my_getint.entry:
+  ret i32 -1
+}
+
+define i32 @main() {
+main.entry:
+  %0 = call i32 @my_getint()
+  %call.res = add i32 %0, 0
+  br label %while.0.cond
+while.0.cond:
+  %n.29.phi.1 = phi i32 [ %call.res, %main.entry ], [ %sub.5, %while.0.loop ]
+  %gt.2 = icmp sgt i32 %n.29.phi.1, 0
+  br i1 %gt.2, label %while.0.loop, label %while.0.merge
+while.0.loop:
+  %sub.5 = sub i32 %n.29.phi.1, 1
+  br label %while.0.cond
+while.0.merge:
+  ret i32 0
+}
+
+)");
+
+    InlinePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @my_getint() {
+my_getint.entry:
+  ret i32 -1
+}
+
+define i32 @main() {
+main.entry:
+  br label %my_getint.entry.inline1
+my_getint.entry.inline1:
+  br label %main.entry.inline1_after
+main.entry.inline1_after:
+  %call.res = add i32 -1, 0
+  br label %while.0.cond
+while.0.cond:
+  %n.29.phi.1 = phi i32 [ %call.res, %main.entry.inline1_after ], [ %sub.5, %while.0.loop ]
+  %gt.2 = icmp sgt i32 %n.29.phi.1, 0
+  br i1 %gt.2, label %while.0.loop, label %while.0.merge
+while.0.loop:
+  %sub.5 = sub i32 %n.29.phi.1, 1
+  br label %while.0.cond
+while.0.merge:
+  ret i32 0
+}
+
+)");
+}

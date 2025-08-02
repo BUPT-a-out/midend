@@ -170,6 +170,14 @@ bool InlinePass::inlineFunction(CallInst* callSite) {
     BasicBlock* callBB = callSite->getParent();
     Function* caller = callBB->getParent();
 
+    std::unordered_set<PHINode*> callBBPhiUsers;
+
+    for (auto use : callBB->users()) {
+        if (auto phi = dyn_cast<PHINode>(use->getUser())) {
+            callBBPhiUsers.insert(phi);
+        }
+    }
+
     if (callee->getNumArgs() != callSite->getNumArgOperands()) {
         return false;
     }
@@ -224,6 +232,13 @@ bool InlinePass::inlineFunction(CallInst* callSite) {
             }
         }
     }
+
+    callBB->replaceAllUsesBy([&](Use*& use) {
+        auto user = use->getUser();
+        if (auto phi = dyn_cast<PHINode>(user)) {
+            use->set(afterCallBB);
+        }
+    });
 
     callSite->eraseFromParent();
 
