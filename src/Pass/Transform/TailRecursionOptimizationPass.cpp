@@ -1,13 +1,17 @@
 #include "Pass/Transform/TailRecursionOptimizationPass.h"
 
+#include <algorithm>
+#include <iostream>
 #include <iterator>
 #include <vector>
 
 #include "IR/BasicBlock.h"
 #include "IR/Function.h"
 #include "IR/IRBuilder.h"
+#include "IR/Instructions/MemoryOps.h"
 #include "IR/Instructions/OtherOps.h"
 #include "IR/Instructions/TerminatorOps.h"
+#include "Pass/Analysis/CallGraph.h"
 #include "Pass/Pass.h"
 #include "Support/Casting.h"
 
@@ -16,11 +20,13 @@ namespace midend {
 static int tail_recursion_loop_cnt = 0;
 
 bool TailRecursionOptimizationPass::runOnFunction(Function& function,
-                                                  AnalysisManager&) {
+                                                  AnalysisManager& am) {
     if (!function.isDefinition()) {
         return false;
     }
 
+    auto* callGraph = am.getAnalysis<CallGraph>(CallGraphAnalysis::getName(),
+                                                *function.getParent());
     std::vector<CallInst*> allRecursiveCalls;
     std::vector<TailCall> tailCalls;
 
@@ -29,7 +35,8 @@ bool TailRecursionOptimizationPass::runOnFunction(Function& function,
             if (auto* callInst = dyn_cast<CallInst>(inst)) {
                 if (callInst->getCalledFunction() == &function) {
                     allRecursiveCalls.push_back(callInst);
-                    if (auto* retInst = getTailCallReturnInst(callInst)) {
+                    if (auto* retInst =
+                            getTailCallReturnInst(callInst, callGraph)) {
                         tailCalls.push_back({callInst, retInst, block});
                     }
                 }
@@ -48,33 +55,19 @@ bool TailRecursionOptimizationPass::runOnFunction(Function& function,
     return transformToLoop(function, tailCalls);
 }
 
-std::vector<TailRecursionOptimizationPass::TailCall>
-TailRecursionOptimizationPass::findTailCalls(Function& function) {
-    std::vector<TailCall> tailCalls;
-
-    for (auto* block : function) {
-        for (auto* inst : *block) {
-            if (auto* callInst = dyn_cast<CallInst>(inst)) {
-                if (callInst->getCalledFunction() == &function) {
-                    if (auto* retInst = getTailCallReturnInst(callInst)) {
-                        tailCalls.push_back({callInst, retInst, block});
-                    }
-                }
-            }
-        }
-    }
-
-    return tailCalls;
-}
-
 ReturnInst* TailRecursionOptimizationPass::getTailCallReturnInst(
-    CallInst* callInst) {
-    // If the call has no uses, it can only be a tail call if it's followed by a
-    // void return
+    CallInst* callInst, const CallGraph* callGraph) {
+    BasicBlock* block = callInst->getParent();
+
+    // If the call has no uses, check for void return after verifying no side
+    // effects
     if (callInst->users().empty()) {
-        auto* terminator = callInst->getParent()->getTerminator();
+        auto* terminator = block->getTerminator();
         if (auto* retInst = dyn_cast<ReturnInst>(terminator)) {
             if (retInst->getReturnValue() == nullptr) {
+                if (hasSideEffectsBetween(callInst, retInst, callGraph)) {
+                    return nullptr;
+                }
                 return retInst;
             }
         }
@@ -94,10 +87,55 @@ ReturnInst* TailRecursionOptimizationPass::getTailCallReturnInst(
                 continue;
             }
         }
-        return nullptr;
+        return nullptr;  // Used by non-return instruction
+    }
+
+    if (tailCallReturn) {
+        if (hasSideEffectsBetween(callInst, tailCallReturn, callGraph)) {
+            return nullptr;
+        }
     }
 
     return tailCallReturn;
+}
+
+bool TailRecursionOptimizationPass::hasSideEffectsBetween(
+    CallInst* callInst, ReturnInst* retInst, const CallGraph* callGraph) {
+    BasicBlock* block = callInst->getParent();
+
+    if (retInst->getParent() != block) {
+        return true;
+    }
+
+    auto callIt = std::find(block->begin(), block->end(), callInst);
+    auto retIt = std::find(block->begin(), block->end(), retInst);
+
+    if (callIt == block->end() || retIt == block->end()) {
+        return true;
+    }
+
+    auto it = callIt;
+    ++it;
+
+    while (it != retIt && it != block->end()) {
+        Instruction* inst = *it;
+
+        if (isa<StoreInst>(inst)) {
+            return true;
+        }
+
+        if (auto* otherCall = dyn_cast<CallInst>(inst)) {
+            Function* calledFunc = otherCall->getCalledFunction();
+            if (!calledFunc || !callGraph ||
+                callGraph->hasSideEffects(calledFunc)) {
+                return true;
+            }
+        }
+
+        ++it;
+    }
+
+    return false;
 }
 
 bool TailRecursionOptimizationPass::transformToLoop(

@@ -13,6 +13,7 @@ class CallInst;
 class ReturnInst;
 class PHINode;
 class Value;
+class CallGraph;
 
 class TailRecursionOptimizationPass : public FunctionPass {
    public:
@@ -29,8 +30,10 @@ class TailRecursionOptimizationPass : public FunctionPass {
         BasicBlock* block;
     };
 
-    std::vector<TailCall> findTailCalls(Function& function);
-    ReturnInst* getTailCallReturnInst(CallInst* callInst);
+    ReturnInst* getTailCallReturnInst(CallInst* callInst,
+                                      const CallGraph* callGraph);
+    bool hasSideEffectsBetween(CallInst* callInst, ReturnInst* retInst,
+                               const CallGraph* callGraph);
     bool transformToLoop(Function& function,
                          const std::vector<TailCall>& tailCalls);
     BasicBlock* createLoopHeader(Function& function);

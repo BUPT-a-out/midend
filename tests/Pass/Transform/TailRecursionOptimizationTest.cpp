@@ -1222,3 +1222,98 @@ exit:
 }
 )");
 }
+
+// Test Case 18: Extended Euclidean Algorithm - non-tail recursion with pointer
+// parameters
+TEST_F(TailRecursionOptimizationTest,
+       ExtendedEuclideanAlgorithm_NonTailRecursion) {
+    auto intType = ctx->getIntegerType(32);
+    auto intPtrType = ctx->getPointerType(intType);
+    auto funcType =
+        FunctionType::get(intType, {intType, intType, intPtrType, intPtrType});
+    auto func = Function::Create(funcType, "exgcd", module.get());
+
+    auto a = func->getArg(0);
+    auto b = func->getArg(1);
+    auto x = func->getArg(2);
+    auto y = func->getArg(3);
+    a->setName("param.a.27");
+    b->setName("param.b.28");
+    x->setName("param.x.29");
+    y->setName("param.y.30");
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "exgcd.entry", func);
+    auto thenBB = BasicBlock::Create(ctx.get(), "if.0.then", func);
+    auto elseBB = BasicBlock::Create(ctx.get(), "if.0.else", func);
+
+    auto zero = builder->getInt32(0);
+    builder->setInsertPoint(entryBB);
+    auto eq1 = builder->createICmpEQ(b, zero);
+    builder->createCondBr(eq1, thenBB, elseBB);
+
+    builder->setInsertPoint(thenBB);
+    auto gep2 = builder->createGEP(intType, x, {zero});
+    builder->createStore(builder->getInt32(1), gep2);
+    auto gep3 = builder->createGEP(intType, y, {zero});
+    builder->createStore(zero, gep3);
+    builder->createRet(a);
+
+    builder->setInsertPoint(elseBB);
+    auto rem8 = builder->createRem(a, b);
+    auto call9 = builder->createCall(func, {b, rem8, x, y});
+    auto gep10 = builder->createGEP(intType, x, {zero});
+    auto load11 = builder->createLoad(gep10);
+    auto gep12 = builder->createGEP(intType, x, {zero});
+    auto gep13 = builder->createGEP(intType, y, {zero});
+    auto load14 = builder->createLoad(gep13);
+    builder->createStore(load14, gep12);
+    auto gep15 = builder->createGEP(intType, y, {zero});
+    auto div19 = builder->createDiv(a, b);
+    auto gep20 = builder->createGEP(intType, y, {zero});
+    auto load21 = builder->createLoad(gep20);
+    auto mul22 = builder->createMul(div19, load21);
+    auto sub23 = builder->createSub(load11, mul22);
+    builder->createStore(sub23, gep15);
+    builder->createRet(call9);
+
+    // Check IR before optimization
+    EXPECT_EQ(
+        IRPrinter().print(func),
+        R"(define i32 @exgcd(i32 %param.a.27, i32 %param.b.28, i32* %param.x.29, i32* %param.y.30) {
+exgcd.entry:
+  %0 = icmp eq i32 %param.b.28, 0
+  br i1 %0, label %if.0.then, label %if.0.else
+if.0.then:
+  %1 = getelementptr i32, i32* %param.x.29, i32 0
+  store i32 1, i32* %1
+  %2 = getelementptr i32, i32* %param.y.30, i32 0
+  store i32 0, i32* %2
+  ret i32 %param.a.27
+if.0.else:
+  %3 = srem i32 %param.a.27, %param.b.28
+  %4 = call i32 @exgcd(i32 %param.b.28, i32 %3, i32* %param.x.29, i32* %param.y.30)
+  %5 = getelementptr i32, i32* %param.x.29, i32 0
+  %6 = load i32, i32* %5
+  %7 = getelementptr i32, i32* %param.x.29, i32 0
+  %8 = getelementptr i32, i32* %param.y.30, i32 0
+  %9 = load i32, i32* %8
+  store i32 %9, i32* %7
+  %10 = getelementptr i32, i32* %param.y.30, i32 0
+  %11 = sdiv i32 %param.a.27, %param.b.28
+  %12 = getelementptr i32, i32* %param.y.30, i32 0
+  %13 = load i32, i32* %12
+  %14 = mul i32 %11, %13
+  %15 = sub i32 %6, %14
+  store i32 %15, i32* %10
+  ret i32 %4
+}
+)");
+
+    TailRecursionOptimizationPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    // Should NOT optimize because this is NOT tail recursion
+    // The recursive call result is used in subsequent calculations after the
+    // call
+    EXPECT_FALSE(changed);
+}
