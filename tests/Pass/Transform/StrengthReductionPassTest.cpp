@@ -275,12 +275,15 @@ entry:
 
     EXPECT_TRUE(changed);
 
-    // After pass - expect shift optimization
+    // After pass - expect bias+shift optimization for signed division
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_div_power2(i32 %arg0) {
 entry:
-  %0 = lshr i32 %arg0, 4
-  ret i32 %0
+  %0 = lshr i32 %arg0, 31
+  %1 = and i32 %0, 15
+  %2 = add i32 %arg0, %1
+  %3 = lshr i32 %2, 4
+  ret i32 %3
 }
 )");
 }
@@ -312,12 +315,15 @@ entry:
 
     EXPECT_TRUE(changed);
 
-    // After pass - expect shift optimization
+    // After pass - expect bias+shift optimization for signed division
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_sdiv_power2(i32 %arg0) {
 entry:
-  %0 = lshr i32 %arg0, 5
-  ret i32 %0
+  %0 = lshr i32 %arg0, 31
+  %1 = and i32 %0, 31
+  %2 = add i32 %arg0, %1
+  %3 = lshr i32 %2, 5
+  ret i32 %3
 }
 )");
 }
@@ -507,14 +513,17 @@ entry:
 
     EXPECT_TRUE(changed);
 
-    // After pass - expect both optimized to shifts
+    // After pass - expect shift for mul and bias+shift for div
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_multiple(i32 %arg0, i32 %arg1) {
 entry:
   %0 = shl i32 %arg0, 3
-  %1 = lshr i32 %arg1, 4
-  %2 = add i32 %0, %1
-  ret i32 %2
+  %1 = lshr i32 %arg1, 31
+  %2 = and i32 %1, 15
+  %3 = add i32 %arg1, %2
+  %4 = lshr i32 %3, 4
+  %5 = add i32 %0, %4
+  ret i32 %5
 }
 )");
 }
@@ -728,12 +737,16 @@ entry:
 
     EXPECT_TRUE(changed);
 
-    // After pass - expect bitwise AND optimization
+    // After pass - expect bias+mask+unbias optimization for signed modulo
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_mod_power2(i32 %arg0) {
 entry:
-  %0 = and i32 %arg0, 7
-  ret i32 %0
+  %0 = lshr i32 %arg0, 31
+  %1 = and i32 %0, 7
+  %2 = add i32 %arg0, %1
+  %3 = and i32 %2, 7
+  %4 = sub i32 %3, %1
+  ret i32 %4
 }
 )");
 }
@@ -798,12 +811,16 @@ entry:
 
     EXPECT_TRUE(changed);
 
-    // After pass - expect bitwise AND optimization (same as positive case)
+    // After pass - expect bias+mask+unbias optimization for signed modulo
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_mod_neg_power2(i32 %arg0) {
 entry:
-  %0 = and i32 %arg0, 7
-  ret i32 %0
+  %0 = lshr i32 %arg0, 31
+  %1 = and i32 %0, 7
+  %2 = add i32 %arg0, %1
+  %3 = and i32 %2, 7
+  %4 = sub i32 %3, %1
+  ret i32 %4
 }
 )");
 }

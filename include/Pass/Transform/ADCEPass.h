@@ -4,8 +4,10 @@
 #include <unordered_set>
 #include <vector>
 
+#include "Pass/Analysis/CallGraph.h"
 #include "Pass/Analysis/DominanceInfo.h"
 #include "Pass/Pass.h"
+#include "Pass/Transform/ADCEPass.h"
 
 namespace midend {
 
@@ -48,6 +50,7 @@ class ADCEPass : public FunctionPass {
     std::unordered_set<BasicBlock*> NewLiveBlocks_;
     std::vector<Instruction*> Worklist_;
     PostDominanceInfo* PDT_;
+    CallGraph* CG_;
     bool updatedCFG;
 
     void init() {

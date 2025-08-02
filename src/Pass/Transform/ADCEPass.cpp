@@ -25,6 +25,8 @@ bool ADCEPass::runOnFunction(Function& function, AnalysisManager& am) {
     // Get post-dominance information
     PDT_ = am.getAnalysis<PostDominanceInfo>(PostDominanceAnalysis::getName(),
                                              function);
+
+    CG_ = am.getAnalysis<CallGraph>(CallGraphAnalysis::getName(), function);
     if (!PDT_) {
         std::cerr << "Warning: PostDominanceAnalysis not available for "
                      "ADCEPass. Skipping function: "
@@ -49,9 +51,10 @@ bool ADCEPass::isAlwaysLive(Instruction* inst) {
     }
 
     // Call instructions might have side effects
-    if (isa<CallInst>(inst)) {
-        // TODO: check if the function is pure
-        return true;
+    if (auto call = dyn_cast<CallInst>(inst)) {
+        if (!CG_ || CG_->hasSideEffects(call->getCalledFunction())) {
+            return true;
+        }
     }
 
     if (isa<ReturnInst>(inst)) {

@@ -13,7 +13,7 @@
 namespace midend {
 
 unsigned StrengthReductionPass::mulThreshold = 3;
-unsigned StrengthReductionPass::divThreshold = 4;
+unsigned StrengthReductionPass::divThreshold = 5;
 
 bool StrengthReductionPass::runOnFunction(Function& function,
                                           AnalysisManager&) {
@@ -276,7 +276,10 @@ Value* StrengthReductionPass::createDivReplacement(Value* dividend,
     unsigned totalOps = 0;
 
     if ((divisor & (divisor - 1)) == 0 && divisor > 0) {
-        totalOps = 1;
+        // For signed division by power of 2, we need 4 operations: extract
+        // sign, mask, add, shift For unsigned division by power of 2, we need 1
+        // operation: shift
+        totalOps = isSigned ? 4 : 1;
     } else {
         totalOps = 3;
     }
@@ -292,9 +295,39 @@ Value* StrengthReductionPass::createDivReplacement(Value* dividend,
         unsigned shift = __builtin_ctzll(divisor);
         auto* shiftAmount =
             ConstantInt::get(dyn_cast<IntegerType>(dividend->getType()), shift);
+
         if (isSigned) {
-            auto* shrInst =
-                BinaryOperator::Create(Opcode::Shr, dividend, shiftAmount);
+            // For signed division by power of 2, we need to handle negative
+            // dividends correctly Formula: (x + (2^n - 1)) >> n for x < 0, x >>
+            // n for x >= 0 We can implement this as: (x + ((x >> 31) & (2^n -
+            // 1))) >> n
+
+            auto* intType = dyn_cast<IntegerType>(dividend->getType());
+            auto* signBitShift =
+                ConstantInt::get(intType, intType->getBitWidth() - 1);
+            auto* bias = ConstantInt::get(intType, (1ULL << shift) - 1);
+
+            // Extract sign bit: dividend >> 31
+            auto* signBit =
+                BinaryOperator::Create(Opcode::Shr, dividend, signBitShift);
+            insertBefore->getParent()->insert(insertBefore->getIterator(),
+                                              signBit);
+
+            // Mask with bias: (dividend >> 31) & (2^n - 1)
+            auto* maskedBias =
+                BinaryOperator::Create(Opcode::And, signBit, bias);
+            insertBefore->getParent()->insert(insertBefore->getIterator(),
+                                              maskedBias);
+
+            // Add bias: dividend + ((dividend >> 31) & (2^n - 1))
+            auto* biasedDividend =
+                BinaryOperator::Create(Opcode::Add, dividend, maskedBias);
+            insertBefore->getParent()->insert(insertBefore->getIterator(),
+                                              biasedDividend);
+
+            // Final shift: (dividend + bias) >> n
+            auto* shrInst = BinaryOperator::Create(Opcode::Shr, biasedDividend,
+                                                   shiftAmount);
             insertBefore->getParent()->insert(insertBefore->getIterator(),
                                               shrInst);
             return shrInst;
@@ -333,11 +366,37 @@ bool StrengthReductionPass::optimizeModulo(BinaryOperator* remInst) {
     IRBuilder builder(remInst->getParent());
     builder.setInsertPoint(remInst);
 
-    auto* maskValue = ConstantInt::get(
-        dyn_cast<IntegerType>(remInst->getType()), absDivisor - 1);
-    Value* replacement = builder.createAnd(dividend, maskValue);
+    auto* intType = dyn_cast<IntegerType>(remInst->getType());
+    auto* maskValue = ConstantInt::get(intType, absDivisor - 1);
 
-    remInst->replaceAllUsesWith(replacement);
+    // For signed modulo by power of 2, we need the bias+mask+unbias approach
+    // Formula: temp = (x + ((x >> 31) & (2^n - 1))) & (2^n - 1); result = temp
+    // - ((x >> 31) & (2^n - 1))
+
+    auto* signBitShift = ConstantInt::get(intType, intType->getBitWidth() - 1);
+
+    // Extract sign bit: dividend >> 31 (or 63 for 64-bit)
+    auto* signBit = BinaryOperator::Create(Opcode::Shr, dividend, signBitShift);
+    remInst->getParent()->insert(remInst->getIterator(), signBit);
+
+    // Get bias: (dividend >> 31) & (2^n - 1)
+    auto* bias = BinaryOperator::Create(Opcode::And, signBit, maskValue);
+    remInst->getParent()->insert(remInst->getIterator(), bias);
+
+    // Add bias: dividend + bias
+    auto* biasedDividend = BinaryOperator::Create(Opcode::Add, dividend, bias);
+    remInst->getParent()->insert(remInst->getIterator(), biasedDividend);
+
+    // Apply mask: (dividend + bias) & (2^n - 1)
+    auto* maskedResult =
+        BinaryOperator::Create(Opcode::And, biasedDividend, maskValue);
+    remInst->getParent()->insert(remInst->getIterator(), maskedResult);
+
+    // Remove bias: result - bias
+    auto* finalResult = BinaryOperator::Create(Opcode::Sub, maskedResult, bias);
+    remInst->getParent()->insert(remInst->getIterator(), finalResult);
+
+    remInst->replaceAllUsesWith(finalResult);
     remInst->eraseFromParent();
     changed = true;
     return true;
