@@ -2426,3 +2426,75 @@ merge:
 }
 )");
 }
+
+TEST_F(ADCETest, ConditionalWithInlineCall) {
+    auto intType = ctx->getIntegerType(32);
+    auto voidType = ctx->getVoidType();
+    auto i1Type = ctx->getIntegerType(1);
+
+    // Create external putint function
+    auto putintType = FunctionType::get(voidType, {intType});
+    auto putintFunc = Function::Create(putintType, "putint", module.get());
+
+    // Create main function
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    // Create basic blocks
+    auto entryBB = BasicBlock::Create(ctx.get(), "main.entry", func);
+    auto orRhsBB = BasicBlock::Create(ctx.get(), "or.1.rhs", func);
+    auto funcEntryInline1BB =
+        BasicBlock::Create(ctx.get(), "func.entry.inline1", func);
+    auto orRhsInline1AfterBB =
+        BasicBlock::Create(ctx.get(), "or.1.rhs.inline1_after", func);
+    auto orMergeBB = BasicBlock::Create(ctx.get(), "or.1.merge", func);
+
+    // Entry block
+    builder->setInsertPoint(entryBB);
+    auto le3 = builder->createICmpSLE(builder->getInt32(100),
+                                      builder->getInt32(99), "le.3");
+    builder->createCondBr(le3, orMergeBB, orRhsBB);
+
+    // or.1.rhs block
+    builder->setInsertPoint(orRhsBB);
+    builder->createBr(funcEntryInline1BB);
+
+    // func.entry.inline1 block - contains the call to putint
+    builder->setInsertPoint(funcEntryInline1BB);
+    builder->createCall(putintFunc, {builder->getInt32(100)});
+    builder->createBr(orRhsInline1AfterBB);
+
+    // or.1.rhs.inline1_after block
+    builder->setInsertPoint(orRhsInline1AfterBB);
+    builder->createBr(orMergeBB);
+
+    // or.1.merge block
+    builder->setInsertPoint(orMergeBB);
+    builder->createRet(builder->getInt32(0));
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @main() {
+main.entry:
+  %le.3 = icmp sle i32 100, 99
+  br i1 %le.3, label %or.1.merge, label %or.1.rhs
+or.1.rhs:
+  br label %func.entry.inline1
+func.entry.inline1:
+  call void @putint(i32 100)
+  br label %or.1.rhs.inline1_after
+or.1.rhs.inline1_after:
+  br label %or.1.merge
+or.1.merge:
+  ret i32 0
+}
+)");
+
+    // Run ADCE pass
+    ADCEPass pass;
+    bool changed = pass.runOnFunction(*func, *am);
+
+    // Debug: print actual output
+    std::cout << "ADCE output:\n" << IRPrinter().print(func) << "\n";
+    std::cout << "Changed: " << changed << "\n";
+
+    EXPECT_FALSE(changed);
+}
