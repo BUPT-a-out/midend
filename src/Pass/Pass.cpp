@@ -33,21 +33,22 @@ bool BasicBlockPass::runOnFunction(Function& f, AnalysisManager& am) {
 // ============================================================================
 
 bool PassManager::runPassOnModule(Pass& pass, Module& m) {
+    std::cout << "Running pass: " << pass.getName() << std::endl;
     bool changed = false;
+    std::unordered_set<std::string> required, preserved;
+    pass.getAnalysisUsage(required, preserved);
     if (pass.getKind() == Pass::PassKind::FunctionPass ||
         pass.getKind() == Pass::PassKind::BasicBlockPass) {
         for (auto f : m) {
             changed |= runPassOnFunction(pass, *f);
         }
-        return changed;
+    } else {
+        changed = pass.runOnModule(m, analysisManager_);
     }
-    std::unordered_set<std::string> required, preserved;
-    pass.getAnalysisUsage(required, preserved);
-
-    changed = pass.runOnModule(m, analysisManager_);
 
     if (changed) {
         analysisManager_.invalidateAllAnalyses(m);
+        std::cout << "\tInvalidated all analyses" << std::endl;
     }
 
     return changed;
@@ -76,6 +77,8 @@ bool PassManager::runPassOnFunction(Pass& pass, Function& f) {
         for (const auto& analysisName : registeredAnalyses) {
             if (after_preserved.find(analysisName) == after_preserved.end()) {
                 analysisManager_.invalidateAnalysis(analysisName, f);
+                std::cout << "\tInvalidated function analysis: " << analysisName
+                          << " for function " << f.getName() << std::endl;
             }
         }
     }
@@ -159,7 +162,6 @@ bool PassBuilder::parsePassPipeline(FunctionPassManager& fpm,
 bool PassManager::run(Module& m) {
     bool changed = false;
     for (auto& pass : passes_) {
-        std::cout << "Running pass: " << pass->getName() << std::endl;
         changed |= runPassOnModule(*pass, m);
     }
     return changed;
@@ -203,6 +205,8 @@ bool AnalysisManager::computeAnalysis(const std::string& name, Function& f) {
                   << std::endl;
         return false;
     }
+    std::cout << "\tComputing analysis: " << name << " for function "
+              << f.getName() << std::endl;
 
     auto analysis = it->second();
     if (!analysis || !analysis->supportsFunction()) {

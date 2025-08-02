@@ -150,7 +150,10 @@ class AnalysisManager {
         }
     }
 
-    void invalidateAllAnalyses(Module&) { moduleAnalyses_.clear(); }
+    void invalidateAllAnalyses(Module&) {
+        moduleAnalyses_.clear();
+        functionAnalyses_.clear();
+    }
 
     void invalidateAllAnalyses(Function& f) { functionAnalyses_.erase(&f); }
 
