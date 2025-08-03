@@ -340,6 +340,7 @@ bool GVNPass::eliminatePHIRedundancy(PHINode* PHI) {
 
     for (const auto& pair : incomingPairs) {
         expr.operands.push_back(getValueNumber(pair.second));
+        expr.operands.push_back(reinterpret_cast<uintptr_t>(pair.first));
     }
 
     return eliminateRedundancy(PHI, expr);
