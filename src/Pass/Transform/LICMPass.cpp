@@ -1,6 +1,7 @@
 #include "Pass/Transform/LICMPass.h"
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <queue>
 
@@ -334,6 +335,48 @@ bool LICMPass::canHoistInstruction(Instruction* I, Loop* L) const {
         return false;
     }
 
+    // Check if any operand is a PHI node defined in the loop header or any
+    // parent loop header Also check if any operand is an instruction that uses
+    // a PHI node from the loop header
+    std::unordered_set<Value*> visited;
+    std::function<bool(Value*, Loop*)> usesPHIFromLoopHeader =
+        [&](Value* V, Loop* currentL) -> bool {
+        if (visited.find(V) != visited.end()) {
+            return false;
+        }
+        visited.insert(V);
+
+        if (auto* phi = dyn_cast<PHINode>(V)) {
+            BasicBlock* phiBB = phi->getParent();
+
+            Loop* checkLoop = currentL;
+            while (checkLoop) {
+                if (phiBB == checkLoop->getHeader()) {
+                    return true;
+                }
+                checkLoop = checkLoop->getParentLoop();
+            }
+        }
+
+        if (auto* inst = dyn_cast<Instruction>(V)) {
+            for (unsigned i = 0; i < inst->getNumOperands(); ++i) {
+                if (usesPHIFromLoopHeader(inst->getOperand(i), currentL)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    };
+
+    for (unsigned i = 0; i < I->getNumOperands(); ++i) {
+        Value* operand = I->getOperand(i);
+        visited.clear();
+        if (usesPHIFromLoopHeader(operand, L)) {
+            return false;
+        }
+    }
+
     bool dominatesExits = isDominatedByLoop(I, L);
     bool alwaysExec = isAlwaysExecuted(I, L);
     bool safeToSpeculate = isSafeToSpeculate(I);
@@ -383,14 +426,56 @@ bool LICMPass::isSafeToSpeculate(Instruction* I) const {
 bool LICMPass::isMemorySafe(Instruction* I, Loop* L) const {
     auto* load = dyn_cast<LoadInst>(I);
     auto* store = dyn_cast<StoreInst>(I);
+    auto* call = dyn_cast<CallInst>(I);
 
-    if (!load && !store) {
+    if (!load && !store && !call) {
         return true;  // Non-memory instruction
     }
 
     if (store) {
         // Never hoist stores (they have side effects)
         return false;
+    }
+
+    if (call) {
+        // For function calls, check if any instruction in the loop may modify
+        // the arguments passed to the function
+        if (!isPureFunction(call->getCalledFunction())) {
+            return false;
+        }
+
+        for (unsigned i = 0; i < call->getNumArgOperands(); ++i) {
+            Value* arg = call->getArgOperand(i);
+
+            if (!arg->getType()->isPointerType()) {
+                continue;
+            }
+
+            std::function<bool(Loop*)> checkLoopAndSubloops =
+                [&](Loop* loop) -> bool {
+                for (BasicBlock* BB : loop->getBlocks()) {
+                    for (auto it = BB->begin(); it != BB->end(); ++it) {
+                        Instruction* inst = *it;
+
+                        if (AA->mayModify(inst, arg)) {
+                            return true;
+                        }
+                    }
+                }
+
+                for (const auto& subLoop : loop->getSubLoops()) {
+                    if (checkLoopAndSubloops(subLoop.get())) {
+                        return true;
+                    }
+                }
+
+                return false;
+            };
+
+            if (checkLoopAndSubloops(L)) {
+                return false;
+            }
+        }
     }
 
     if (load) {
