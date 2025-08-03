@@ -18,7 +18,7 @@ bool Mem2RegContext::runOnFunction(Function& function, AnalysisManager& am) {
     if (function.empty()) return false;
 
     dominanceInfo_ =
-        am.getAnalysis<DominanceInfo>("DominanceAnalysis", function);
+        am.getAnalysis<DominanceInfo>(DominanceAnalysis::getName(), function);
     if (!dominanceInfo_) {
         std::cerr << "Warning: DominanceInfo not available for Mem2RegPass. "
                      "Skipping function: "
