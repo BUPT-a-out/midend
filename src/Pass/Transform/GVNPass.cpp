@@ -84,7 +84,12 @@ bool GVNPass::runOnFunction(Function& F, AnalysisManager& AM) {
     DI = AM.getAnalysis<DominanceInfo>("DominanceAnalysis", F);
     CG = AM.getAnalysis<CallGraph>("CallGraphAnalysis", *F.getParent());
     AA = AM.getAnalysis<AliasAnalysis::Result>("AliasAnalysis", F);
-    if (!DI || !CG || !AA) return false;
+    if (!AA || !DI || !CG) {
+        std::cerr << "Warning: GVNPass requires DominanceInfo, CallGraph, and "
+                     "AliasAnalysis. Skipping function "
+                  << F.getName() << "." << std::endl;
+        return false;
+    }
 
     valueNumberToValue.clear();
     expressionToValueNumber.clear();
@@ -398,42 +403,72 @@ bool GVNPass::eliminateLoadRedundancy(Instruction* Load) {
 
 bool GVNPass::hasInterveningStore(Instruction* availLoad,
                                   Instruction* currentLoad, Value* ptr) {
-    // If they're in different blocks, return true for conservatism
-    if (availLoad->getParent() != currentLoad->getParent()) {
+    BasicBlock* availBB = availLoad->getParent();
+    BasicBlock* currentBB = currentLoad->getParent();
+
+    if (availBB == currentBB) {
+        bool foundAvailLoad = false;
+
+        for (auto* I : *availBB) {
+            if (I == availLoad) {
+                foundAvailLoad = true;
+                continue;
+            }
+
+            if (I == currentLoad) {
+                break;
+            }
+
+            if (foundAvailLoad && AA->mayModify(I, ptr)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (!DI->dominates(availBB, currentBB)) {
         return true;
     }
 
-    // Same block - check instructions between availLoad and currentLoad
-    BasicBlock* BB = availLoad->getParent();
-    bool foundAvailLoad = false;
+    std::vector<BasicBlock*> pathBlocks;
+    BasicBlock* current = currentBB;
 
-    for (auto* I : *BB) {
+    while (current && current != availBB) {
+        pathBlocks.push_back(current);
+        current = DI->getImmediateDominator(current);
+    }
+
+    if (current != availBB) {
+        return true;
+    }
+
+    for (BasicBlock* BB : pathBlocks) {
+        if (BB == currentBB) {
+            for (auto* I : *BB) {
+                if (I == currentLoad) {
+                    break;
+                }
+                if (AA->mayModify(I, ptr)) {
+                    return true;
+                }
+            }
+        } else {
+            for (auto* I : *BB) {
+                if (AA->mayModify(I, ptr)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    bool foundAvailLoad = false;
+    for (auto* I : *availBB) {
         if (I == availLoad) {
             foundAvailLoad = true;
             continue;
         }
-
-        if (I == currentLoad) {
-            break;
-        }
-
-        if (foundAvailLoad && isa<StoreInst>(I)) {
-            auto* SI = cast<StoreInst>(I);
-            Value* storePtr = SI->getPointerOperand();
-
-            if (storePtr == ptr) {
-                return true;  // Exact same pointer - definitely aliases
-            }
-
-            if (AA) {
-                auto aliasResult = AA->alias(ptr, storePtr);
-                if (aliasResult != AliasAnalysis::AliasResult::NoAlias) {
-                    return true;  // May alias or must alias - be conservative
-                }
-            } else {
-                // No alias analysis - be conservative
-                return true;
-            }
+        if (foundAvailLoad && AA->mayModify(I, ptr)) {
+            return true;
         }
     }
 
