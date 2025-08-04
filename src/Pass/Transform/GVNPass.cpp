@@ -16,6 +16,8 @@
 #include "Pass/Analysis/DominanceInfo.h"
 #include "Support/Casting.h"
 
+constexpr bool GVN_DEBUG = false;
+
 namespace midend {
 
 unsigned GVNPass::UnionFind::find(unsigned x) {
@@ -159,8 +161,10 @@ bool GVNPass::processInstruction(Instruction* I) {
         return processFunctionCall(I);
     } else if (isSafeToEliminate(I)) {
         if (Value* simplified = trySimplifyInstruction(I)) {
-            std::cout << "GVN: Simplified: " << I->getName() << " to "
-                      << simplified->getName() << std::endl;
+            if constexpr (GVN_DEBUG) {
+                std::cout << "GVN: Simplified: " << I->getName() << " to "
+                          << simplified->getName() << std::endl;
+            }
             replaceAndErase(I, simplified);
             numGVNEliminated++;
             return true;
@@ -282,9 +286,11 @@ bool GVNPass::eliminateRedundancy(Instruction* I, const Expression& expr) {
                 }
             }
 
-            std::cout << "GVN: Eliminated redundant instruction: "
-                      << I->getName() << " with " << leader->getName()
-                      << std::endl;
+            if constexpr (GVN_DEBUG) {
+                std::cout << "GVN: Eliminated redundant instruction: "
+                          << I->getName() << " with " << leader->getName()
+                          << std::endl;
+            }
             replaceAndErase(I, leader);
             numGVNEliminated++;
             return true;
@@ -318,8 +324,10 @@ bool GVNPass::eliminatePHIRedundancy(PHINode* PHI) {
     if (allSame) {
         // All operands are equivalent, replace PHI with one of them
         Value* replacement = PHI->getIncomingValue(0);
-        std::cout << "GVN: Eliminated PHI: " << PHI->getName() << " with "
-                  << replacement->getName() << std::endl;
+        if constexpr (GVN_DEBUG) {
+            std::cout << "GVN: Eliminated PHI: " << PHI->getName() << " with "
+                      << replacement->getName() << std::endl;
+        }
         replaceAndErase(PHI, replacement);
         numPHIEliminated++;
         return true;
@@ -375,8 +383,10 @@ bool GVNPass::eliminateLoadRedundancy(Instruction* Load) {
             }
         }
 
-        std::cout << "GVN: Eliminated redundant load: " << LI->getName()
-                  << " with " << availLoad->getName() << std::endl;
+        if constexpr (GVN_DEBUG) {
+            std::cout << "GVN: Eliminated redundant load: " << LI->getName()
+                      << " with " << availLoad->getName() << std::endl;
+        }
         replaceAndErase(LI, availLoad);
         return true;
     }

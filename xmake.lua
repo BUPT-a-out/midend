@@ -9,6 +9,7 @@ target("midend")
     add_files("src/IR/**/*.cpp")
     add_files("src/Pass/*.cpp")
     add_files("src/Pass/**/*.cpp")
+    add_files("src/Support/*.cpp")
     
     add_includedirs("include", {public = true})
     

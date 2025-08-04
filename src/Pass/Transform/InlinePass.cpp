@@ -26,9 +26,6 @@ bool InlinePass::runOnModule(Module& module, AnalysisManager& am) {
         return false;
     }
 
-    // Reset inline counter for each module
-    inlineCounter_ = 0;
-
     bool changed = false;
 
     const SuperGraph& superGraph = cg->getSuperGraph();

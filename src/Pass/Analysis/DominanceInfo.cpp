@@ -704,8 +704,6 @@ void ReverseIDFCalculator::calculate(BBVector& IDFBlocks) {
                 DoWork(Succ);
             }
 
-            std::cout << "DEBUG: Processed block " << Node->getName()
-                      << " with level " << RootLevel << "\n";
             // Process post-dominator tree children
             for (auto& Succ :
                  PDT_.getDominatorTree()->getNode(Node)->children) {
