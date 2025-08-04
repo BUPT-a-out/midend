@@ -426,53 +426,8 @@ bool GVNPass::hasInterveningStore(Instruction* availLoad,
         return false;
     }
 
-    if (!DI->dominates(availBB, currentBB)) {
-        return true;
-    }
-
-    std::vector<BasicBlock*> pathBlocks;
-    BasicBlock* current = currentBB;
-
-    while (current && current != availBB) {
-        pathBlocks.push_back(current);
-        current = DI->getImmediateDominator(current);
-    }
-
-    if (current != availBB) {
-        return true;
-    }
-
-    for (BasicBlock* BB : pathBlocks) {
-        if (BB == currentBB) {
-            for (auto* I : *BB) {
-                if (I == currentLoad) {
-                    break;
-                }
-                if (AA->mayModify(I, ptr)) {
-                    return true;
-                }
-            }
-        } else {
-            for (auto* I : *BB) {
-                if (AA->mayModify(I, ptr)) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    bool foundAvailLoad = false;
-    for (auto* I : *availBB) {
-        if (I == availLoad) {
-            foundAvailLoad = true;
-            continue;
-        }
-        if (foundAvailLoad && AA->mayModify(I, ptr)) {
-            return true;
-        }
-    }
-
-    return false;
+    // TODO: cross-block stores analysis should be handled by MemorySSA
+    return true;
 }
 
 Value* GVNPass::findAvailableLoad(Instruction* Load, BasicBlock* BB) {
