@@ -2,8 +2,7 @@
 
 #include <algorithm>
 #include <functional>
-#include <iostream>
-#include <queue>
+#include <vector>
 
 #include "IR/BasicBlock.h"
 #include "IR/Constant.h"
@@ -34,24 +33,32 @@ bool LICMPass::runOnFunction(Function& F, AnalysisManager& AM) {
     if (!DI || !LI || !AA || !CG) {
         return false;
     }
-    loopInvariants_.clear();
-    hoistedInstructions_.clear();
-    instructionToLoop_.clear();
 
     bool changed = false;
-    auto loopsInPostOrder = getLoopsInPostOrder(LI->getTopLevelLoops());
 
-    for (Loop* L : loopsInPostOrder) {
-        identifyLoopInvariants(L);
-    }
-
-    for (Loop* L : loopsInPostOrder) {
-        if (processLoop(L)) {
+    // Process top-level loops recursively (DFS order processes innermost loops
+    // first)
+    for (const auto& L : LI->getTopLevelLoops()) {
+        if (processLoopRecursive(L.get())) {
             changed = true;
         }
     }
 
-    if (hoistToFunctionEntry()) {
+    return changed;
+}
+
+bool LICMPass::processLoopRecursive(Loop* L) {
+    bool changed = false;
+
+    // First process all subloops recursively (innermost first)
+    for (const auto& subLoop : L->getSubLoops()) {
+        if (processLoopRecursive(subLoop.get())) {
+            changed = true;
+        }
+    }
+
+    // Then process this loop
+    if (processLoop(L)) {
         changed = true;
     }
 
@@ -70,128 +77,57 @@ bool LICMPass::processLoop(Loop* L) {
         changed = true;
     }
 
-    identifyLoopInvariants(L);
-
-    BasicBlock* preheader = getOrCreatePreheader(L);
-    if (!preheader) {
-        return changed;
-    }
-
-    if (hoistInstructions(L, preheader)) {
+    // Then hoist loop invariant instructions
+    if (hoistLoopInvariants(L)) {
         changed = true;
     }
 
     return changed;
 }
 
-void LICMPass::identifyLoopInvariants(Loop* L) {
-    std::queue<Instruction*> worklist;
-    std::unordered_set<Instruction*> processed;
+bool LICMPass::hoistLoopInvariants(Loop* L) {
+    BasicBlock* preheader = L->getPreheader();
+    if (!preheader) {
+        return false;
+    }
 
-    auto& invariantsForThisLoop = loopInvariants_[L];
+    bool changed = false;
+    bool foundInvariant = true;
 
-    bool changed = true;
-    while (changed) {
-        changed = false;
+    // Iteratively find and hoist loop-invariant instructions until no more can
+    // be found
+    while (foundInvariant) {
+        foundInvariant = false;
+        std::vector<Instruction*> toHoist;
 
+        // Find all instructions that are loop invariant
         for (BasicBlock* BB : L->getBlocks()) {
             for (auto it = BB->begin(); it != BB->end(); ++it) {
                 Instruction* I = *it;
 
-                if (processed.find(I) != processed.end()) {
-                    continue;
-                }
-
-                if (I->isTerminator()) {
-                    processed.insert(I);
-                    continue;
-                }
-
+                // Check if all operands are loop invariant
                 bool allOperandsInvariant = true;
                 for (unsigned i = 0; i < I->getNumOperands(); ++i) {
                     Value* operand = I->getOperand(i);
-
-                    if (auto* phi = dyn_cast<PHINode>(operand)) {
-                        BasicBlock* phiBB = phi->getParent();
-                        Loop* phiLoop = LI->getLoopFor(phiBB);
-                        if (phiLoop && phiLoop != L && !phiLoop->contains(L)) {
-                            allOperandsInvariant = false;
-                            break;
-                        }
-                    }
-
                     if (!isLoopInvariant(operand, L)) {
                         allOperandsInvariant = false;
                         break;
                     }
                 }
 
-                if (allOperandsInvariant && isMemorySafe(I, L) &&
-                    !hasSideEffects(I)) {
-                    invariantsForThisLoop.insert(I);
-                    processed.insert(I);
-                    changed = true;
-
-                    Loop* targetLoop = findOutermostInvariantLoop(I, L);
-                    instructionToLoop_[I] = targetLoop;
-                }
-            }
-        }
-    }
-}
-
-bool LICMPass::hoistInstructions(Loop* L, BasicBlock* preheader) {
-    bool changed = false;
-    std::vector<Instruction*> toHoist;
-    for (BasicBlock* BB : L->getBlocks()) {
-        for (auto it = BB->begin(); it != BB->end(); ++it) {
-            Instruction* I = *it;
-            if (hoistedInstructions_.find(I) != hoistedInstructions_.end()) {
-                continue;  // Skip already hoisted instructions
-            }
-
-            if (canHoistInstruction(I, L)) {
-                auto it_target = instructionToLoop_.find(I);
-                if (it_target != instructionToLoop_.end() &&
-                    it_target->second == L) {
+                // If all operands are invariant and instruction can be hoisted
+                if (allOperandsInvariant && canHoistInstruction(I, L)) {
                     toHoist.push_back(I);
                 }
             }
         }
-    }
 
-    std::vector<Instruction*> additionalToHoist;
-    for (Instruction* I : toHoist) {
-        for (unsigned i = 0; i < I->getNumOperands(); ++i) {
-            Value* operand = I->getOperand(i);
-            if (auto* depInst = dyn_cast<Instruction>(operand)) {
-                auto it = loopInvariants_.find(L);
-                if (it != loopInvariants_.end() &&
-                    it->second.find(depInst) != it->second.end() &&
-                    L->contains(depInst->getParent()) &&
-                    std::find(toHoist.begin(), toHoist.end(), depInst) ==
-                        toHoist.end() &&
-                    std::find(additionalToHoist.begin(),
-                              additionalToHoist.end(),
-                              depInst) == additionalToHoist.end() &&
-                    canHoistInstruction(depInst, L)) {
-                    additionalToHoist.push_back(depInst);
-                }
-            }
+        // Hoist the instructions
+        for (Instruction* I : toHoist) {
+            moveInstructionToPreheader(I, preheader);
+            changed = true;
+            foundInvariant = true;
         }
-    }
-
-    toHoist.insert(toHoist.end(), additionalToHoist.begin(),
-                   additionalToHoist.end());
-
-    std::sort(toHoist.begin(), toHoist.end(),
-              [this](Instruction* A, Instruction* B) {
-                  return compareInstructionsForHoisting(A, B);
-              });
-    for (Instruction* I : toHoist) {
-        moveInstructionToPreheader(I, preheader);
-        hoistedInstructions_.insert(I);
-        changed = true;
     }
 
     return changed;
@@ -243,84 +179,6 @@ bool LICMPass::simplifyInvariantPHIs(Loop* L) {
     return changed;
 }
 
-bool LICMPass::hoistToFunctionEntry() {
-    bool changed = false;
-    std::vector<Instruction*> toHoist;
-
-    for (const auto& pair : instructionToLoop_) {
-        if (pair.second == nullptr) {
-            // Check if this instruction is invariant for ANY loop
-            // (it should have been marked as invariant for the outermost loop
-            // it can be hoisted from)
-            bool isInvariant = false;
-            for (const auto& loopPair : loopInvariants_) {
-                if (loopPair.second.find(pair.first) != loopPair.second.end()) {
-                    isInvariant = true;
-                    break;
-                }
-            }
-
-            if (isInvariant) {
-                toHoist.push_back(pair.first);
-            }
-        }
-    }
-
-    if (toHoist.empty()) {
-        return false;
-    }
-
-    std::vector<Instruction*> sortedInstructions;
-    std::unordered_set<Instruction*> remaining(toHoist.begin(), toHoist.end());
-
-    while (!remaining.empty()) {
-        Instruction* next = nullptr;
-        for (Instruction* candidate : remaining) {
-            bool hasDependency = false;
-            for (unsigned i = 0; i < candidate->getNumOperands(); ++i) {
-                if (auto* operandInst =
-                        dyn_cast<Instruction>(candidate->getOperand(i))) {
-                    if (remaining.find(operandInst) != remaining.end()) {
-                        hasDependency = true;
-                        break;
-                    }
-                }
-            }
-            if (!hasDependency) {
-                next = candidate;
-                break;
-            }
-        }
-
-        if (!next) {
-            next = *remaining.begin();
-        }
-
-        sortedInstructions.push_back(next);
-        remaining.erase(next);
-    }
-
-    toHoist = sortedInstructions;
-
-    Function* F = toHoist[0]->getParent()->getParent();
-    BasicBlock* entryBB = &F->front();
-
-    for (Instruction* I : toHoist) {
-        I->removeFromParent();
-
-        auto* terminator = entryBB->getTerminator();
-        if (terminator) {
-            I->insertBefore(terminator);
-        } else {
-            entryBB->push_back(I);
-        }
-        hoistedInstructions_.insert(I);
-        changed = true;
-    }
-
-    return changed;
-}
-
 bool LICMPass::isLoopInvariant(Value* V, Loop* L) const {
     if (dyn_cast<Constant>(V)) {
         return true;
@@ -336,16 +194,7 @@ bool LICMPass::isLoopInvariant(Value* V, Loop* L) const {
             // Instruction is outside the loop, so it's invariant
             return true;
         }
-
-        // Instruction is inside the loop
-        // Check if it's marked as invariant for THIS specific loop
-        auto it = loopInvariants_.find(L);
-        if (it != loopInvariants_.end()) {
-            const auto& invariantsForThisLoop = it->second;
-            return invariantsForThisLoop.find(V) != invariantsForThisLoop.end();
-        }
-
-        // Not marked as invariant for this loop
+        // Otherwise, it's not invariant for this loop
         return false;
     }
 
@@ -353,17 +202,6 @@ bool LICMPass::isLoopInvariant(Value* V, Loop* L) const {
 }
 
 bool LICMPass::canHoistInstruction(Instruction* I, Loop* L) const {
-    // Check if instruction is marked as invariant for this loop
-    auto it = loopInvariants_.find(L);
-    if (it == loopInvariants_.end()) {
-        return false;
-    }
-
-    const auto& invariantsForThisLoop = it->second;
-    if (invariantsForThisLoop.find(I) == invariantsForThisLoop.end()) {
-        return false;
-    }
-
     if (hasSideEffects(I)) {
         return false;
     }
@@ -621,72 +459,6 @@ bool LICMPass::isAlwaysExecuted(Instruction* I, Loop* L) const {
     return true;
 }
 
-BasicBlock* LICMPass::getOrCreatePreheader(Loop* L) {
-    BasicBlock* preheader = L->getPreheader();
-
-    if (preheader) {
-        return preheader;
-    }
-
-    // Create a new preheader
-    BasicBlock* header = L->getHeader();
-    Function* F = header->getParent();
-
-    // Find the predecessor that comes from outside the loop
-    BasicBlock* outsidePred = nullptr;
-    auto preds = header->getPredecessors();
-    for (BasicBlock* pred : preds) {
-        if (!L->contains(pred)) {
-            if (outsidePred) {
-                // Multiple outside predecessors, can't create simple preheader
-                return nullptr;
-            }
-            outsidePred = pred;
-        }
-    }
-
-    if (!outsidePred) {
-        return nullptr;
-    }
-
-    // Create new preheader block
-    Context* ctx = F->getParent()->getContext();
-    preheader = BasicBlock::Create(ctx, header->getName() + ".preheader", F);
-
-    // Update CFG: outsidePred -> preheader -> header
-    // Find the branch to header in outsidePred and redirect it
-    auto* terminator = outsidePred->getTerminator();
-    if (auto* br = dyn_cast<BranchInst>(terminator)) {
-        if (br->isUnconditional()) {
-            br->setOperand(0, preheader);
-        } else {
-            for (unsigned i = 0; i < br->getNumSuccessors(); ++i) {
-                if (br->getSuccessor(i) == header) {
-                    br->setOperand(i + 1, preheader);
-                }
-            }
-        }
-    }
-
-    // Create branch from preheader to header
-    auto* newBranch = BranchInst::Create(header, preheader);
-    preheader->push_back(newBranch);
-
-    // Update PHI nodes in header
-    for (auto it = header->begin(); it != header->end(); ++it) {
-        Instruction* I = *it;
-        if (auto* phi = dyn_cast<PHINode>(I)) {
-            for (unsigned i = 0; i < phi->getNumIncomingValues(); ++i) {
-                if (phi->getIncomingBlock(i) == outsidePred) {
-                    phi->setIncomingBlock(i, preheader);
-                }
-            }
-        }
-    }
-
-    return preheader;
-}
-
 bool LICMPass::isPureFunction(Function* F) const {
     if (!F) {
         return false;
@@ -706,112 +478,6 @@ void LICMPass::moveInstructionToPreheader(Instruction* I,
     } else {
         preheader->push_back(I);
     }
-}
-
-std::vector<Loop*> LICMPass::getLoopsInPostOrder(
-    const std::vector<std::unique_ptr<Loop>>& topLevelLoops) {
-    std::vector<Loop*> postOrder;
-    std::unordered_set<Loop*> visited;
-
-    for (const auto& L : topLevelLoops) {
-        addLoopsToPostOrder(L.get(), postOrder, visited);
-    }
-
-    return postOrder;
-}
-
-void LICMPass::addLoopsToPostOrder(Loop* L, std::vector<Loop*>& postOrder,
-                                   std::unordered_set<Loop*>& visited) {
-    if (visited.find(L) != visited.end()) {
-        return;
-    }
-
-    visited.insert(L);
-
-    // First process all subloops
-    for (const auto& subLoop : L->getSubLoops()) {
-        addLoopsToPostOrder(subLoop.get(), postOrder, visited);
-    }
-
-    // Then add this loop
-    postOrder.push_back(L);
-}
-
-Loop* LICMPass::findOutermostInvariantLoop(Instruction* I, Loop* currentLoop) {
-    Loop* outermostLoop = currentLoop;
-
-    Loop* parentLoop = currentLoop->getParentLoop();
-    while (parentLoop) {
-        bool invariantInParent = true;
-
-        for (unsigned i = 0; i < I->getNumOperands(); ++i) {
-            Value* operand = I->getOperand(i);
-            if (!isLoopInvariant(operand, parentLoop)) {
-                invariantInParent = false;
-                break;
-            }
-        }
-
-        if (invariantInParent && isMemorySafe(I, parentLoop) &&
-            !hasSideEffects(I)) {
-            outermostLoop = parentLoop;
-            parentLoop = parentLoop->getParentLoop();
-        } else {
-            break;
-        }
-    }
-
-    return outermostLoop;
-}
-
-bool LICMPass::compareInstructionsForHoisting(Instruction* A, Instruction* B) {
-    std::function<bool(Instruction*, Instruction*,
-                       std::unordered_set<Instruction*>&)>
-        dependsOn = [&](Instruction* user, Instruction* def,
-                        std::unordered_set<Instruction*>& visited) -> bool {
-        if (visited.find(user) != visited.end()) {
-            return false;
-        }
-        visited.insert(user);
-
-        for (unsigned i = 0; i < user->getNumOperands(); ++i) {
-            Value* operand = user->getOperand(i);
-            if (operand == def) {
-                return true;
-            }
-
-            if (auto* operandInst = dyn_cast<Instruction>(operand)) {
-                if (dependsOn(operandInst, def, visited)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    };
-
-    std::unordered_set<Instruction*> visitedA;
-    bool AdependsOnB = dependsOn(A, B, visitedA);
-
-    std::unordered_set<Instruction*> visitedB;
-    bool BdependsOnA = dependsOn(B, A, visitedB);
-
-    if (AdependsOnB && !BdependsOnA) {
-        return false;
-    }
-    if (BdependsOnA && !AdependsOnB) {
-        return true;
-    }
-
-    if (A->getParent() != B->getParent()) {
-        return DI->dominates(A->getParent(), B->getParent());
-    }
-
-    BasicBlock* BB = A->getParent();
-    for (auto it = BB->begin(); it != BB->end(); ++it) {
-        if (*it == A) return true;
-        if (*it == B) return false;
-    }
-    return false;
 }
 
 }  // namespace midend

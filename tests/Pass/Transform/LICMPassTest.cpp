@@ -223,7 +223,6 @@ exit:
 
 // Test 3: Nested loops with multiple invariant levels
 TEST_F(LICMPassTest, NestedLoopsMultipleInvariantLevels) {
-    GTEST_SKIP();
     auto intType = ctx->getIntegerType(32);
     auto funcType = FunctionType::get(intType, {intType, intType, intType});
     auto func = Function::Create(funcType, "test_func", module.get());
@@ -318,11 +317,11 @@ entry:
 outer.loop:
   %i = phi i32 [ 0, %entry ], [ %next_i, %outer.body ]
   %outer.cond = icmp slt i32 %i, %arg1
+  %outer_inv = add i32 %global_inv, %i
   br i1 %outer.cond, label %inner.loop, label %exit
 inner.loop:
   %j = phi i32 [ 0, %outer.loop ], [ %next_j, %inner.body ]
   %inner.cond = icmp slt i32 %j, %arg2
-  %outer_inv = add i32 %global_inv, %i
   br i1 %inner.cond, label %inner.body, label %outer.body
 inner.body:
   %computation = mul i32 %outer_inv, %j
@@ -2217,10 +2216,10 @@ exit:
               R"(define i32 @test_func([4 x i32]* %arg0, i32 %arg1) {
 entry:
   %field0_ptr = getelementptr [4 x i32], [4 x i32]* %arg0, i32 0
-  %field0_load = load i32, i32* %field0_ptr
   %field1_ptr = getelementptr [4 x i32], [4 x i32]* %arg0, i32 1
-  %field1_load = load i32, i32* %field1_ptr
   %field2_ptr = getelementptr [4 x i32], [4 x i32]* %arg0, i32 2
+  %field0_load = load i32, i32* %field0_ptr
+  %field1_load = load i32, i32* %field1_ptr
   %field2_load = load i32, i32* %field2_ptr
   %sum = add i32 %field0_load, %field1_load
   %result = add i32 %sum, %field2_load

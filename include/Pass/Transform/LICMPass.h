@@ -44,15 +44,9 @@ class LICMPass : public FunctionPass {
     LoopInfo* LI = nullptr;
     AliasAnalysis::Result* AA = nullptr;
     CallGraph* CG = nullptr;
-
-    std::unordered_map<Loop*, std::unordered_set<Value*>> loopInvariants_;
-    std::unordered_set<Instruction*> hoistedInstructions_;
-    std::unordered_map<Instruction*, Loop*> instructionToLoop_;
-
     bool processLoop(Loop* L);
-    void identifyLoopInvariants(Loop* L);
-    bool hoistInstructions(Loop* L, BasicBlock* preheader);
-    bool hoistToFunctionEntry();
+    bool processLoopRecursive(Loop* L);
+    bool hoistLoopInvariants(Loop* L);
     bool simplifyInvariantPHIs(Loop* L);
     bool isLoopInvariant(Value* V, Loop* L) const;
     bool canHoistInstruction(Instruction* I, Loop* L) const;
@@ -61,15 +55,8 @@ class LICMPass : public FunctionPass {
     bool isDominatedByLoop(Instruction* I, Loop* L) const;
     bool isAlwaysExecuted(Instruction* I, Loop* L) const;
     bool isSafeToSpeculate(Instruction* I) const;
-    BasicBlock* getOrCreatePreheader(Loop* L);
     bool isPureFunction(Function* F) const;
     void moveInstructionToPreheader(Instruction* I, BasicBlock* preheader);
-    std::vector<Loop*> getLoopsInPostOrder(
-        const std::vector<std::unique_ptr<Loop>>& topLevelLoops);
-    void addLoopsToPostOrder(Loop* L, std::vector<Loop*>& postOrder,
-                             std::unordered_set<Loop*>& visited);
-    Loop* findOutermostInvariantLoop(Instruction* I, Loop* currentLoop);
-    bool compareInstructionsForHoisting(Instruction* A, Instruction* B);
 };
 
 }  // namespace midend
