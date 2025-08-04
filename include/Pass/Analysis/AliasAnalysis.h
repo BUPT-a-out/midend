@@ -14,6 +14,7 @@ class Module;
 class AllocaInst;
 class GetElementPtrInst;
 class Instruction;
+class CallGraph;
 
 class AliasAnalysis : public AnalysisBase {
    public:
@@ -43,7 +44,8 @@ class AliasAnalysis : public AnalysisBase {
 
     class Result : public AnalysisResult {
        public:
-        explicit Result(Function* f) : function(f) {}
+        explicit Result(Function* f, AnalysisManager* am)
+            : function(f), analysisManager(am) {}
 
         // Main alias query interface
         AliasResult alias(const Location& loc1, const Location& loc2);
@@ -75,6 +77,7 @@ class AliasAnalysis : public AnalysisBase {
 
        private:
         Function* function;
+        AnalysisManager* analysisManager;
 
         // Cache for alias query results
         struct PairHash {
@@ -119,8 +122,10 @@ class AliasAnalysis : public AnalysisBase {
         return name;
     }
 
-    std::unique_ptr<AnalysisResult> runOnFunction(Function& f) override;
-    std::unique_ptr<AnalysisResult> runOnModule(Module& m) override;
+    std::unique_ptr<AnalysisResult> runOnFunction(Function& f,
+                                                  AnalysisManager& am) override;
+    std::unique_ptr<AnalysisResult> runOnModule(Module& m,
+                                                AnalysisManager& am) override;
 
     bool supportsFunction() const override { return true; }
     bool supportsModule() const override { return true; }

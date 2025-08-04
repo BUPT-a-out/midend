@@ -10,6 +10,7 @@
 #include "IR/IRBuilder.h"
 #include "IR/Module.h"
 #include "IR/Type.h"
+#include "Pass/Analysis/AliasAnalysis.h"
 #include "Pass/Analysis/CallGraph.h"
 
 using namespace midend;
@@ -148,7 +149,11 @@ class CallGraphTestBuilder {
 
 class CallGraphTest : public ::testing::Test {
    protected:
-    void SetUp() override {}
+    std::unique_ptr<AnalysisManager> am;
+    void SetUp() override {
+        am = std::make_unique<AnalysisManager>();
+        am->registerAnalysisType<AliasAnalysis>();
+    }
     void TearDown() override {}
 };
 
@@ -157,7 +162,7 @@ TEST_F(CallGraphTest, EmptyModule) {
     CallGraphTestBuilder builder;
     builder.defineFunctions(0);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     EXPECT_TRUE(cg.getSCCs().empty());
 }
 
@@ -166,7 +171,7 @@ TEST_F(CallGraphTest, SingleFunction) {
     CallGraphTestBuilder builder;
     builder.defineFunctions(1);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     Function* f0 = builder.getFunction(0);
 
     EXPECT_FALSE(cg.isInSCC(f0));
@@ -183,7 +188,7 @@ TEST_F(CallGraphTest, SimpleCallChain) {
     builder.defineFunctions(2);
     builder.addCall(0, 1);  // func0 calls func1
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     Function* f0 = builder.getFunction(0);
     Function* f1 = builder.getFunction(1);
 
@@ -214,7 +219,7 @@ TEST_F(CallGraphTest, SelfRecursiveFunction) {
     builder.defineFunctions(1);
     builder.addCall(0, 0);  // func0 calls itself
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     Function* f0 = builder.getFunction(0);
 
     // Check that the function is in an SCC
@@ -234,7 +239,7 @@ TEST_F(CallGraphTest, MutualRecursion) {
     builder.addCall(0, 1);  // func0 calls func1
     builder.addCall(1, 0);  // func1 calls func0
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     Function* f0 = builder.getFunction(0);
     Function* f1 = builder.getFunction(1);
 
@@ -259,7 +264,7 @@ TEST_F(CallGraphTest, DisconnectedComponents) {
     builder.addCall(0, 1);  // Component 1: func0 -> func1
     builder.addCall(2, 3);  // Component 2: func2 -> func3
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Check that each component is separate
     auto iter0 = cg.getDownstreamIterator(builder.getFunction(0));
@@ -282,7 +287,7 @@ TEST_F(CallGraphTest, LargeSCC) {
     builder.addCall(3, 4);
     builder.addCall(4, 0);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // All functions should be in the same SCC
     for (size_t i = 0; i < 5; ++i) {
@@ -318,7 +323,7 @@ TEST_F(CallGraphTest, MultipleSCCs) {
 
     // Isolated functions: 4, 5
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Check first SCC
     auto* scc1 = cg.getSCC(builder.getFunction(0));
@@ -355,7 +360,7 @@ TEST_F(CallGraphTest, DiamondWithSCC) {
     builder.addCall(1, 2);
     builder.addCall(2, 1);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Functions 1 and 2 should be in the same SCC
     EXPECT_TRUE(cg.isInSCC(builder.getFunction(1)));
@@ -377,7 +382,7 @@ TEST_F(CallGraphTest, ExternalFunctionCalls) {
     builder.addCall(0, 1);
     builder.addExternalCall(1, external);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // External function should have side effects
     EXPECT_TRUE(cg.hasSideEffects(external));
@@ -402,7 +407,7 @@ TEST_F(CallGraphTest, SideEffectPropagation) {
     // Only func3 has direct side effects
     builder.addSideEffect(3);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // All functions should have side effects due to propagation
     EXPECT_TRUE(cg.hasSideEffects(builder.getFunction(0)));
@@ -421,7 +426,7 @@ TEST_F(CallGraphTest, PureSCC) {
     builder.addCall(1, 2);
     builder.addCall(2, 0);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // All functions should be in the same SCC
     for (size_t i = 0; i < 3; ++i) {
@@ -460,7 +465,7 @@ TEST_F(CallGraphTest, IndirectCalls) {
     localBuilder.setInsertPoint(bb);
     localBuilder.createRet(caller->getArg(0));
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Indirect calls should be considered to have side effects
     EXPECT_TRUE(cg.hasSideEffects(caller));
@@ -482,7 +487,7 @@ TEST_F(CallGraphTest, StressTest) {
         builder.addCall(i, i + 1);
     }
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // No function should be in an SCC
     for (size_t i = 0; i < numFuncs; ++i) {
@@ -531,7 +536,7 @@ TEST_F(CallGraphTest, ComplexNestedSCCs) {
     builder.addCall(13, 3);  // 13 -> SCC2
     builder.addCall(14, 7);  // 14 -> SCC3
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Verify SCC1 (nodes 0, 1, 2)
     for (int i = 0; i < 3; ++i) {
@@ -600,7 +605,7 @@ TEST_F(CallGraphTest, ComplexSCCWithMultipleEntryExit) {
     builder.addCall(5, 11);  // Exit from node 5
     builder.addCall(7, 11);  // Exit from node 7
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Verify the main SCC contains exactly nodes 0-7
     for (int i = 0; i < 8; ++i) {
@@ -669,7 +674,7 @@ TEST_F(CallGraphTest, InterleavedSCCs) {
 
     builder.addCall(18, 19);  // Isolated chain
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Verify SCC1 (nodes 0, 1)
     EXPECT_TRUE(cg.isInSCC(builder.getFunction(0)));
@@ -726,7 +731,7 @@ TEST_F(CallGraphTest, CompleteGraph) {
         }
     }
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // All nodes should be in the same SCC
     for (int i = 0; i < 10; ++i) {
@@ -755,7 +760,7 @@ TEST_F(CallGraphTest, TournamentDAG) {
         }
     }
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // No node should be in an SCC (it's acyclic)
     for (int i = 0; i < 10; ++i) {
@@ -819,7 +824,7 @@ TEST_F(CallGraphTest, MixedLargeAndSmallComponents) {
 
     // Isolated nodes (22, 23, 24)
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Verify large SCC
     for (int i = 0; i < 10; ++i) {
@@ -887,7 +892,7 @@ TEST_F(CallGraphTest, TreeWithBackEdges) {
     builder.addCall(13, 3);  // Creates larger SCC: 3, 8, 13
     builder.addCall(14, 0);  // Connects to root, creating large SCC
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
 
     // Due to the back edge from 14 to 0, and the path 0->3->8->14,
     // nodes 0, 3, 8, 13, 14 should form an SCC
@@ -936,7 +941,7 @@ TEST_F(CallGraphTest, SuperGraphBasic) {
     // Connect SCCs: SCC1 -> SCC2
     builder.addCall(1, 2);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     const SuperGraph& sg = cg.getSuperGraph();
 
     // Should have 2 super nodes
@@ -985,7 +990,7 @@ TEST_F(CallGraphTest, SuperGraphSelfRecursive) {
     // Functions 1 and 2 are connected but not recursive
     builder.addCall(1, 2);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     const SuperGraph& sg = cg.getSuperGraph();
 
     // Should have 3 super nodes (self-recursive counts as SCC)
@@ -1033,7 +1038,7 @@ TEST_F(CallGraphTest, SuperGraphReverseTopologicalOrder) {
     builder.addCall(1, 2);
     builder.addCall(3, 4);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     const SuperGraph& sg = cg.getSuperGraph();
 
     EXPECT_EQ(sg.size(), 3);
@@ -1065,7 +1070,7 @@ TEST_F(CallGraphTest, SuperGraphIterator) {
     builder.addCall(3, 2);
     builder.addCall(1, 2);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     const SuperGraph& sg = cg.getSuperGraph();
 
     // Test basic iteration (should be in reverse topological order - bottom-up)
@@ -1109,7 +1114,7 @@ TEST_F(CallGraphTest, SuperGraphComplex) {
     builder.addCall(3, 4);
     builder.addCall(5, 6);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     const SuperGraph& sg = cg.getSuperGraph();
 
     // Should have 7 super nodes: 3 SCCs + 4 individual nodes
@@ -1182,7 +1187,7 @@ TEST_F(CallGraphTest, SuperGraphReverseTopologicalIteration) {
     builder.addCall(1, 2);
     builder.addCall(3, 4);
 
-    CallGraph cg(builder.getModule());
+    CallGraph cg(builder.getModule(), am.get());
     const SuperGraph& sg = cg.getSuperGraph();
 
     SuperNode* sn01 = cg.getSuperNode(builder.getFunction(0));

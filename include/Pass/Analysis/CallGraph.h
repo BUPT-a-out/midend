@@ -254,7 +254,6 @@ class CallGraph : public AnalysisResult {
     void buildSuperGraph() const;
 
    public:
-    explicit CallGraph(Module* M);
     explicit CallGraph(Module* M, AnalysisManager* AM);
 
     /// Get the call graph node for a function
@@ -412,10 +411,6 @@ class CallGraphAnalysis : public AnalysisBase {
         return name;
     }
 
-    std::unique_ptr<AnalysisResult> runOnModule(Module& m) override {
-        return std::make_unique<CallGraph>(&m);
-    }
-
     std::unique_ptr<AnalysisResult> runOnModule(Module& m,
                                                 AnalysisManager& AM) override {
         return std::make_unique<CallGraph>(&m, &AM);
@@ -423,7 +418,9 @@ class CallGraphAnalysis : public AnalysisBase {
 
     bool supportsModule() const override { return true; }
 
-    static Result run(Module& M) { return std::make_unique<CallGraph>(&M); }
+    static Result run(Module& M, AnalysisManager& AM) {
+        return std::make_unique<CallGraph>(&M, &AM);
+    }
 };
 
 }  // namespace midend

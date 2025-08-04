@@ -11,12 +11,6 @@
 
 namespace midend {
 
-CallGraph::CallGraph(Module* M) : module_(M), analysisManager_(nullptr) {
-    buildCallGraph();
-    computeSCCs();
-    analyzeSideEffects();
-}
-
 CallGraph::CallGraph(Module* M, AnalysisManager* AM)
     : module_(M), analysisManager_(AM) {
     buildCallGraph();
@@ -129,13 +123,6 @@ bool CallGraph::hasSideEffectsInternal(Function* F,
         if (analysisManager_) {
             aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>(
                 "AliasAnalysis", *F);
-        }
-
-        if (!aliasInfo) {
-            AliasAnalysis aliasAnalysis;
-            aliasResultOwner = aliasAnalysis.runOnFunction(*F);
-            aliasInfo =
-                static_cast<AliasAnalysis::Result*>(aliasResultOwner.get());
         }
 
         for (BasicBlock* BB : *F) {

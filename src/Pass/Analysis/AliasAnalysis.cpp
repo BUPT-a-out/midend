@@ -7,6 +7,7 @@
 #include "IR/Instructions/OtherOps.h"
 #include "IR/Instructions/TerminatorOps.h"
 #include "IR/Module.h"
+#include "Pass/Analysis/CallGraph.h"
 #include "Support/Casting.h"
 
 namespace midend {
@@ -52,7 +53,28 @@ bool AliasAnalysis::Result::mayModify(Instruction* inst, const Location& loc) {
         return alias(Location(storePtr, 0), loc) != AliasResult::NoAlias;
     }
 
-    if (isa<CallInst>(inst)) {
+    if (auto call = dyn_cast<CallInst>(inst)) {
+        if (analysisManager) {
+            if (auto cg = analysisManager->getAnalysis<CallGraph>(
+                    "CallGraphAnalysis", *function->getParent())) {
+                if (auto calledFunction = call->getCalledFunction()) {
+                    if (!cg->hasSideEffects(calledFunction)) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if (isGlobalObject(loc.ptr)) {
+            return true;
+        }
+
+        for (size_t i = 0; i < call->getNumArgOperands(); ++i) {
+            Value* arg = call->getArgOperand(i);
+            if (alias(Location(arg, 0), loc) != AliasResult::NoAlias) {
+                return true;
+            }
+        }
         return true;
     }
 
@@ -456,16 +478,18 @@ void AliasAnalysis::Result::addConstraints() {
     }
 }
 
-std::unique_ptr<AnalysisResult> AliasAnalysis::runOnFunction(Function& f) {
-    auto result = std::make_unique<Result>(&f);
+std::unique_ptr<AnalysisResult> AliasAnalysis::runOnFunction(
+    Function& f, AnalysisManager& am) {
+    auto result = std::make_unique<Result>(&f, &am);
     result->buildPointsToSets();
     return result;
 }
 
-std::unique_ptr<AnalysisResult> AliasAnalysis::runOnModule(Module& m) {
+std::unique_ptr<AnalysisResult> AliasAnalysis::runOnModule(
+    Module& m, AnalysisManager& am) {
     for (auto& f : m) {
         if (!f->isDeclaration()) {
-            return runOnFunction(*f);
+            return runOnFunction(*f, am);
         }
     }
     return nullptr;

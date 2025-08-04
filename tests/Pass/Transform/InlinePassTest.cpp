@@ -9,6 +9,7 @@
 #include "IR/Instructions/TerminatorOps.h"
 #include "IR/Module.h"
 #include "IR/Type.h"
+#include "Pass/Analysis/AliasAnalysis.h"
 #include "Pass/Analysis/CallGraph.h"
 #include "Pass/Pass.h"
 #include "Pass/Transform/InlinePass.h"
@@ -20,6 +21,7 @@ class InlinePassTest : public ::testing::Test {
     void SetUp() override {
         am = new AnalysisManager();
         am->registerAnalysisType<CallGraphAnalysis>();
+        am->registerAnalysisType<AliasAnalysis>();
         ctx = new Context();
         builder = new IRBuilder(ctx);
         module = new Module("test_module", ctx);
