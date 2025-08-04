@@ -372,9 +372,8 @@ bool LICMPass::canHoistInstruction(Instruction* I, Loop* L) const {
         return false;
     }
 
-    // Check if any operand is a PHI node defined in the loop header or any
-    // parent loop header Also check if any operand is an instruction that uses
-    // a PHI node from the loop header
+    // Check if any operand is a PHI node defined in the current loop header or
+    // any nested loop header. PHI nodes from parent loops are safe to use.
     std::unordered_set<Value*> visited;
     std::function<bool(Value*, Loop*)> usesPHIFromLoopHeader =
         [&](Value* V, Loop* currentL) -> bool {
@@ -385,13 +384,11 @@ bool LICMPass::canHoistInstruction(Instruction* I, Loop* L) const {
 
         if (auto* phi = dyn_cast<PHINode>(V)) {
             BasicBlock* phiBB = phi->getParent();
+            Loop* phiLoop = LI->getLoopFor(phiBB);
 
-            Loop* checkLoop = currentL;
-            while (checkLoop) {
-                if (phiBB == checkLoop->getHeader()) {
-                    return true;
-                }
-                checkLoop = checkLoop->getParentLoop();
+            if (phiLoop &&
+                (phiLoop == currentL || currentL->contains(phiLoop))) {
+                return true;
             }
         }
 
