@@ -88,6 +88,8 @@ void LICMPass::identifyLoopInvariants(Loop* L) {
     std::queue<Instruction*> worklist;
     std::unordered_set<Instruction*> processed;
 
+    auto& invariantsForThisLoop = loopInvariants_[L];
+
     bool changed = true;
     while (changed) {
         changed = false;
@@ -126,7 +128,7 @@ void LICMPass::identifyLoopInvariants(Loop* L) {
 
                 if (allOperandsInvariant && isMemorySafe(I, L) &&
                     !hasSideEffects(I)) {
-                    loopInvariants_.insert(I);
+                    invariantsForThisLoop.insert(I);
                     processed.insert(I);
                     changed = true;
 
@@ -144,8 +146,11 @@ bool LICMPass::hoistInstructions(Loop* L, BasicBlock* preheader) {
     for (BasicBlock* BB : L->getBlocks()) {
         for (auto it = BB->begin(); it != BB->end(); ++it) {
             Instruction* I = *it;
-            if (loopInvariants_.find(I) != loopInvariants_.end() &&
-                canHoistInstruction(I, L)) {
+            if (hoistedInstructions_.find(I) != hoistedInstructions_.end()) {
+                continue;  // Skip already hoisted instructions
+            }
+
+            if (canHoistInstruction(I, L)) {
                 auto it_target = instructionToLoop_.find(I);
                 if (it_target != instructionToLoop_.end() &&
                     it_target->second == L) {
@@ -160,7 +165,9 @@ bool LICMPass::hoistInstructions(Loop* L, BasicBlock* preheader) {
         for (unsigned i = 0; i < I->getNumOperands(); ++i) {
             Value* operand = I->getOperand(i);
             if (auto* depInst = dyn_cast<Instruction>(operand)) {
-                if (loopInvariants_.find(depInst) != loopInvariants_.end() &&
+                auto it = loopInvariants_.find(L);
+                if (it != loopInvariants_.end() &&
+                    it->second.find(depInst) != it->second.end() &&
                     L->contains(depInst->getParent()) &&
                     std::find(toHoist.begin(), toHoist.end(), depInst) ==
                         toHoist.end() &&
@@ -241,9 +248,21 @@ bool LICMPass::hoistToFunctionEntry() {
     std::vector<Instruction*> toHoist;
 
     for (const auto& pair : instructionToLoop_) {
-        if (pair.second == nullptr &&
-            loopInvariants_.find(pair.first) != loopInvariants_.end()) {
-            toHoist.push_back(pair.first);
+        if (pair.second == nullptr) {
+            // Check if this instruction is invariant for ANY loop
+            // (it should have been marked as invariant for the outermost loop
+            // it can be hoisted from)
+            bool isInvariant = false;
+            for (const auto& loopPair : loopInvariants_) {
+                if (loopPair.second.find(pair.first) != loopPair.second.end()) {
+                    isInvariant = true;
+                    break;
+                }
+            }
+
+            if (isInvariant) {
+                toHoist.push_back(pair.first);
+            }
         }
     }
 
@@ -312,18 +331,36 @@ bool LICMPass::isLoopInvariant(Value* V, Loop* L) const {
     }
 
     if (auto* I = dyn_cast<Instruction>(V)) {
+        // Check if instruction is in this loop
         if (!L->contains(I->getParent())) {
+            // Instruction is outside the loop, so it's invariant
             return true;
         }
 
-        return loopInvariants_.find(I) != loopInvariants_.end();
+        // Instruction is inside the loop
+        // Check if it's marked as invariant for THIS specific loop
+        auto it = loopInvariants_.find(L);
+        if (it != loopInvariants_.end()) {
+            const auto& invariantsForThisLoop = it->second;
+            return invariantsForThisLoop.find(V) != invariantsForThisLoop.end();
+        }
+
+        // Not marked as invariant for this loop
+        return false;
     }
 
     return false;
 }
 
 bool LICMPass::canHoistInstruction(Instruction* I, Loop* L) const {
-    if (loopInvariants_.find(I) == loopInvariants_.end()) {
+    // Check if instruction is marked as invariant for this loop
+    auto it = loopInvariants_.find(L);
+    if (it == loopInvariants_.end()) {
+        return false;
+    }
+
+    const auto& invariantsForThisLoop = it->second;
+    if (invariantsForThisLoop.find(I) == invariantsForThisLoop.end()) {
         return false;
     }
 

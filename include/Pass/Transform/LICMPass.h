@@ -45,7 +45,7 @@ class LICMPass : public FunctionPass {
     AliasAnalysis::Result* AA = nullptr;
     CallGraph* CG = nullptr;
 
-    std::unordered_set<Value*> loopInvariants_;
+    std::unordered_map<Loop*, std::unordered_set<Value*>> loopInvariants_;
     std::unordered_set<Instruction*> hoistedInstructions_;
     std::unordered_map<Instruction*, Loop*> instructionToLoop_;
 
