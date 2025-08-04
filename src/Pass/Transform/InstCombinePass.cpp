@@ -1,5 +1,6 @@
 #include "Pass/Transform/InstCombinePass.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "IR/BasicBlock.h"
@@ -7,18 +8,22 @@
 #include "IR/Function.h"
 #include "IR/Instruction.h"
 #include "IR/Instructions/BinaryOps.h"
+#include "IR/Instructions/MemoryOps.h"
+#include "IR/Instructions/OtherOps.h"
+#include "Pass/Analysis/AliasAnalysis.h"
 #include "Support/Casting.h"
 
 namespace midend {
 
-bool InstCombinePass::runOnFunction(Function& function, AnalysisManager&) {
+bool InstCombinePass::runOnFunction(Function& function, AnalysisManager& am) {
     if (function.isDeclaration()) {
         return false;
     }
-    return combineInstructions(function);
+    return combineInstructions(function, am);
 }
 
-bool InstCombinePass::combineInstructions(Function& function) {
+bool InstCombinePass::combineInstructions(Function& function,
+                                          AnalysisManager& am) {
     changed_ = false;
     bool localChanged = true;
 
@@ -36,6 +41,8 @@ bool InstCombinePass::combineInstructions(Function& function) {
                     simplified = simplifyUnaryOp(unaryOp);
                 } else if (auto* cmpInst = dyn_cast<CmpInst>(inst)) {
                     simplified = simplifyCmpInst(cmpInst);
+                } else if (auto* loadInst = dyn_cast<LoadInst>(inst)) {
+                    simplified = forwardStoreToLoad(loadInst, am, function);
                 }
 
                 if (simplified && simplified != inst) {
@@ -342,6 +349,54 @@ Value* InstCombinePass::simplifyXor(Value* lhs, Value* rhs) {
 
     if (lhs == rhs) {
         return ConstantInt::get(static_cast<IntegerType*>(lhs->getType()), 0);
+    }
+
+    return nullptr;
+}
+
+Value* InstCombinePass::forwardStoreToLoad(LoadInst* load, AnalysisManager& am,
+                                           Function& function) {
+    Value* loadPtr = load->getPointerOperand();
+
+    BasicBlock* bb = load->getParent();
+    if (!bb) {
+        return nullptr;
+    }
+
+    auto loadIt = std::find(bb->begin(), bb->end(), load);
+    if (loadIt == bb->begin()) {
+        return nullptr;
+    }
+
+    AliasAnalysis::Result* AA =
+        am.getAnalysis<AliasAnalysis::Result>("AliasAnalysis", function);
+
+    for (auto it = std::reverse_iterator(loadIt); it != bb->rend(); ++it) {
+        Instruction* inst = *it;
+
+        if (auto* storeInst = dyn_cast<StoreInst>(inst)) {
+            Value* storePtr = storeInst->getPointerOperand();
+            if (storePtr == loadPtr) {
+                return storeInst->getValueOperand();
+            }
+
+            // TODO: use alias analysis when AA is fixed
+            // if (AA) {
+            //     auto aliasResult = AA->alias(storePtr, loadPtr);
+            //     if (aliasResult == AliasAnalysis::AliasResult::MustAlias) {
+            //         return storeInst->getValueOperand();
+            //     }
+            // }
+        }
+
+        if (auto* callInst = dyn_cast<CallInst>(inst)) {
+            if (AA) {
+                if (!AA->mayModify(callInst, loadPtr)) {
+                    continue;
+                }
+            }
+            break;
+        }
     }
 
     return nullptr;

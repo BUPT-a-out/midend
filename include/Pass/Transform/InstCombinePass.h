@@ -10,6 +10,7 @@ class Value;
 class BinaryOperator;
 class UnaryOperator;
 class CmpInst;
+class LoadInst;
 
 class InstCombinePass : public FunctionPass {
    public:
@@ -19,7 +20,7 @@ class InstCombinePass : public FunctionPass {
     bool runOnFunction(Function& function, AnalysisManager& am) override;
 
    private:
-    bool combineInstructions(Function& function);
+    bool combineInstructions(Function& function, AnalysisManager& am);
     Value* simplifyBinaryOp(BinaryOperator* binOp);
     Value* simplifyUnaryOp(UnaryOperator* unaryOp);
     Value* simplifyCmpInst(CmpInst* cmpInst);
@@ -32,6 +33,8 @@ class InstCombinePass : public FunctionPass {
     Value* simplifyAnd(Value* lhs, Value* rhs);
     Value* simplifyOr(Value* lhs, Value* rhs);
     Value* simplifyXor(Value* lhs, Value* rhs);
+    Value* forwardStoreToLoad(LoadInst* load, AnalysisManager& am,
+                              Function& function);
 
     bool changed_;
 };
