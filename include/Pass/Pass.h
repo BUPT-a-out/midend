@@ -278,19 +278,16 @@ class PassBase : public Pass {
 
 class PassManager {
    private:
-    enum class PassItemType {
-        PASS,
-        LOOP_BEGIN,
-        LOOP_END
-    };
-    
+    enum class PassItemType { PASS, LOOP_BEGIN, LOOP_END };
+
     struct PassItem {
         PassItemType type;
         std::unique_ptr<Pass> pass;  // only for PASS type
-        int maxIterations;            // only for LOOP_BEGIN type
-        std::string loopContent;      // only for LOOP_BEGIN type, generated on first use
+        int maxIterations;           // only for LOOP_BEGIN type
+        std::string
+            loopContent;  // only for LOOP_BEGIN type, generated on first use
     };
-    
+
     std::vector<PassItem> passItems_;
     AnalysisManager analysisManager_;
 
@@ -304,9 +301,9 @@ class PassManager {
 
     template <typename PassT, typename... Args>
     void addPass(Args&&... args) {
-        passItems_.push_back({PassItemType::PASS, 
-                              std::make_unique<PassT>(std::forward<Args>(args)...), 
-                              0, ""});
+        passItems_.push_back(
+            {PassItemType::PASS,
+             std::make_unique<PassT>(std::forward<Args>(args)...), 0, ""});
     }
 
     void addPass(std::unique_ptr<Pass> pass) {
@@ -323,7 +320,7 @@ class PassManager {
         return analysisManager_;
     }
 
-    size_t getNumPasses() const { 
+    size_t getNumPasses() const {
         size_t count = 0;
         for (const auto& item : passItems_) {
             if (item.type == PassItemType::PASS) count++;
@@ -371,12 +368,11 @@ struct ParseResult {
     bool success;
     std::string errorMessage;
     size_t errorPosition;
-    
-    static ParseResult createSuccess() {
-        return {true, "", 0};
-    }
-    
-    static ParseResult createError(const std::string& message, size_t position) {
+
+    static ParseResult createSuccess() { return {true, "", 0}; }
+
+    static ParseResult createError(const std::string& message,
+                                   size_t position) {
         return {false, message, position};
     }
 };
@@ -408,9 +404,10 @@ class PassBuilder {
 
     ParseResult parsePassPipeline(PassManager& pm, const std::string& pipeline);
     ParseResult parsePassPipeline(FunctionPassManager& fpm,
-                           const std::string& pipeline);
-    
-    bool parsePassPipeline(PassManager& pm, const std::string& pipeline, bool legacy);
+                                  const std::string& pipeline);
+
+    bool parsePassPipeline(PassManager& pm, const std::string& pipeline,
+                           bool legacy);
     bool parsePassPipeline(FunctionPassManager& fpm,
                            const std::string& pipeline, bool legacy);
 };
