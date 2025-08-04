@@ -377,9 +377,10 @@ bool GVNPass::eliminateLoadRedundancy(Instruction* Load) {
     // Look for available loads in current and dominating blocks
     Value* availLoad = findAvailableLoad(LI, LI->getParent());
     if (availLoad && availLoad != LI) {
-        // TODO: use alias analysis when AA is fixed
         if (auto* availInst = dyn_cast<LoadInst>(availLoad)) {
-            if (LI->getPointerOperand() != availInst->getPointerOperand()) {
+            if (AA && AA->alias(LI->getPointerOperand(),
+                                availInst->getPointerOperand()) ==
+                          AliasAnalysis::AliasResult::MustAlias) {
                 return false;
             }
         }

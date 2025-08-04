@@ -380,13 +380,12 @@ Value* InstCombinePass::forwardStoreToLoad(LoadInst* load, AnalysisManager& am,
                 return storeInst->getValueOperand();
             }
 
-            // TODO: use alias analysis when AA is fixed
-            // if (AA) {
-            //     auto aliasResult = AA->alias(storePtr, loadPtr);
-            //     if (aliasResult == AliasAnalysis::AliasResult::MustAlias) {
-            //         return storeInst->getValueOperand();
-            //     }
-            // }
+            if (AA) {
+                auto aliasResult = AA->alias(storePtr, loadPtr);
+                if (aliasResult == AliasAnalysis::AliasResult::MustAlias) {
+                    return storeInst->getValueOperand();
+                }
+            }
         }
 
         if (auto* callInst = dyn_cast<CallInst>(inst)) {
