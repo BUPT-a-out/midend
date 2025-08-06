@@ -1003,7 +1003,7 @@ TEST_F(GVNPassTest, LoadStoreAliasing3) {
     builder->setInsertPoint(entryBB);
 
     auto ptr1 = builder->createAlloca(intType, nullptr, "alloca1");
-    auto ptr2 = builder->createAlloca(intType, nullptr, "alloca2");
+    builder->createAlloca(intType, nullptr, "alloca2");
 
     // Load from ptr1
     auto load1 = builder->createLoad(ptr1, "load1");

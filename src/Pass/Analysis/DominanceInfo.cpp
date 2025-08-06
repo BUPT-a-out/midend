@@ -1,6 +1,7 @@
 #include "Pass/Analysis/DominanceInfo.h"
 
 #include <algorithm>
+#include <climits>
 #include <functional>
 #include <iostream>
 #include <queue>
@@ -17,7 +18,6 @@ DominanceInfoBase<IsPostDom>::DominanceInfoBase(Function* F) : function_(F) {
     if (!F || F->empty()) return;
 
     computeDominators();
-    computeImmediateDominators();
     computeDominanceFrontier();
     buildDominatorTree();
 }
@@ -136,104 +136,202 @@ bool DominanceInfoBase<IsPostDom>::isVirtualExit(BasicBlock* BB) const {
     }
 }
 
-// https://oi-wiki.org/graph/dominator-tree/#%E6%95%B0%E6%8D%AE%E6%B5%81%E8%BF%AD%E4%BB%A3%E6%B3%95
 template <bool IsPostDom>
 void DominanceInfoBase<IsPostDom>::computeDominators() {
     if (function_->empty()) return;
+    computeDominatorsLengauerTarjan();
+}
+
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeDominatorsLengauerTarjan() {
+    ltNodes_.clear();
+    dfsOrder_.clear();
+    immediateDominators_.clear();
+    dominators_.clear();
+
+    // Step 1: DFS numbering and tree construction
+    performDFS();
+
+    // Step 2: Compute semi-dominators and immediate dominators
+    computeSemiDominators();
+
+    // Step 3: Finalize immediate dominators
+    finalizeDominators();
+
+    // Step 4: Compute full dominators set from immediate dominators
+    computeFullDominatorsFromImmediate();
+}
+
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::performDFS() {
+    if (function_->empty()) return;
 
     auto* entry = getEntry();
+    if (!entry) return;
 
-    BBVector rpoBlocks = computeReversePostOrder();
+    std::unordered_set<BasicBlock*> visited;
+    std::stack<std::pair<BasicBlock*, int>> stack;
 
-    for (auto* BB : rpoBlocks) {
-        dominators_[BB] = BBSet();
-    }
+    int dfsNum = 0;
+    stack.push({entry, -1});
 
-    // Initialize: entry dominates only itself, others dominate all
-    dominators_[entry].insert(entry);
-    for (auto* BB : rpoBlocks) {
-        if (BB != entry) {
-            dominators_[BB] = BBSet(rpoBlocks.begin(), rpoBlocks.end());
-        }
-    }
+    while (!stack.empty()) {
+        auto current = stack.top();
+        stack.pop();
+        auto* bb = current.first;
+        int parentIdx = current.second;
 
-    bool changed = true;
-    while (changed) {
-        changed = false;
+        if (visited.count(bb)) continue;
+        visited.insert(bb);
 
-        for (auto* BB : rpoBlocks) {
-            if (BB == entry) continue;
+        LTNode node;
+        node.block = bb;
+        node.dfsNum = dfsNum++;
+        node.parent = (parentIdx >= 0) ? dfsOrder_[parentIdx] : nullptr;
+        node.ancestor = nullptr;
+        node.label = bb;
+        node.sdom = bb;
 
-            BBSet newDominators;
+        ltNodes_[bb] = node;
+        dfsOrder_.push_back(bb);
 
-            // Intersection of dominators of all predecessors
-            auto predecessors = getPreds(BB);
-            if (!predecessors.empty()) {
-                bool first = true;
-                for (auto* Pred : predecessors) {
-                    if (first) {
-                        newDominators = dominators_[Pred];
-                        first = false;
-                    } else {
-                        BBSet intersection;
-                        std::set_intersection(
-                            newDominators.begin(), newDominators.end(),
-                            dominators_[Pred].begin(), dominators_[Pred].end(),
-                            std::inserter(intersection, intersection.begin()));
-                        newDominators = std::move(intersection);
-                    }
-                }
-                newDominators.insert(BB);  // Block always dominates itself
-            } else {
-                // If no predecessors and not entry, this block is unreachable
-                // In a well-formed CFG, only entry should have no predecessors
-                newDominators.insert(BB);
-            }
-
-            if (newDominators != dominators_[BB]) {
-                dominators_[BB] = std::move(newDominators);
-                changed = true;
+        auto successors = getSuccs(bb);
+        for (auto it = successors.rbegin(); it != successors.rend(); ++it) {
+            if (!visited.count(*it)) {
+                stack.push({*it, node.dfsNum});
             }
         }
     }
 }
 
-// https://en.wikipedia.org/wiki/Dominator_(graph_theory)
 template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::computeImmediateDominators() {
-    if (function_->empty()) return;
+BasicBlock* DominanceInfoBase<IsPostDom>::compress(BasicBlock* v) {
+    auto& vNode = ltNodes_[v];
+    if (vNode.ancestor && ltNodes_[vNode.ancestor].ancestor) {
+        compress(vNode.ancestor);
 
-    auto* entry = getEntry();
-    immediateDominators_[entry] = nullptr;  // Entry has no immediate dominator
+        auto& vAncNode = ltNodes_[vNode.ancestor];
+        auto& vLabelNode = ltNodes_[vNode.label];
+        auto& vAncLabelNode = ltNodes_[vAncNode.label];
 
-    for (auto& BB : *function_) {
-        if (BB == entry) continue;
+        if (vAncLabelNode.dfsNum < vLabelNode.dfsNum) {
+            vNode.label = vAncNode.label;
+        }
+        vNode.ancestor = vAncNode.ancestor;
+    }
+    return vNode.label;
+}
 
-        BasicBlock* idom = nullptr;
-        const auto& dominatorsOfBB = dominators_[BB];
+template <bool IsPostDom>
+BasicBlock* DominanceInfoBase<IsPostDom>::eval(BasicBlock* v) {
+    auto& vNode = ltNodes_[v];
+    if (!vNode.ancestor) {
+        return v;
+    } else {
+        compress(v);
+        return vNode.label;
+    }
+}
 
-        for (auto* dominator : dominatorsOfBB) {
-            if (dominator == BB) continue;
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::link(BasicBlock* v, BasicBlock* w) {
+    ltNodes_[w].ancestor = v;
+}
 
-            // Check if this dominator is dominated by all other dominators
-            bool isImmediate = true;
-            for (auto* otherDom : dominatorsOfBB) {
-                if (otherDom == BB || otherDom == dominator) continue;
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeSemiDominators() {
+    std::vector<std::vector<BasicBlock*>> bucket(dfsOrder_.size());
 
-                if (dominators_[dominator].find(otherDom) ==
-                    dominators_[dominator].end()) {
-                    isImmediate = false;
-                    break;
-                }
-            }
+    // Process nodes in reverse DFS order (except root)
+    for (int i = dfsOrder_.size() - 1; i >= 1; --i) {
+        auto* w = dfsOrder_[i];
+        auto& wNode = ltNodes_[w];
 
-            if (isImmediate) {
-                idom = dominator;
-                break;
+        // Step 1: Compute semi-dominator
+        auto predecessors = getPreds(w);
+        int minSdomDfs = INT_MAX;
+        BasicBlock* semiDom = nullptr;
+
+        for (auto* v : predecessors) {
+            if (ltNodes_.count(v) == 0) continue;
+
+            BasicBlock* u = eval(v);
+            auto& uNode = ltNodes_[u];
+            int sdomDfs = ltNodes_[uNode.sdom].dfsNum;
+
+            if (sdomDfs < minSdomDfs) {
+                minSdomDfs = sdomDfs;
+                semiDom = uNode.sdom;
             }
         }
 
-        immediateDominators_[BB] = idom;
+        if (semiDom) {
+            wNode.sdom = semiDom;
+
+            // Step 2: Add w to bucket of its semi-dominator
+            int sdomIdx = ltNodes_[semiDom].dfsNum;
+            bucket[sdomIdx].push_back(w);
+        }
+
+        // Link w to its parent in DFS tree
+        if (wNode.parent) {
+            link(wNode.parent, w);
+        }
+
+        // Step 3: Process bucket of parent
+        if (wNode.parent) {
+            int parentIdx = ltNodes_[wNode.parent].dfsNum;
+            for (auto* v : bucket[parentIdx]) {
+                BasicBlock* u = eval(v);
+                auto& vNode = ltNodes_[v];
+                auto& uNode = ltNodes_[u];
+
+                if (ltNodes_[uNode.sdom].dfsNum < ltNodes_[vNode.sdom].dfsNum) {
+                    immediateDominators_[v] = u;
+                } else {
+                    immediateDominators_[v] = wNode.parent;
+                }
+            }
+            bucket[parentIdx].clear();
+        }
+    }
+}
+
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::finalizeDominators() {
+    // Process nodes in DFS order (skip root)
+    for (size_t i = 1; i < dfsOrder_.size(); ++i) {
+        auto* w = dfsOrder_[i];
+        auto& wNode = ltNodes_[w];
+
+        if (immediateDominators_[w] != wNode.sdom) {
+            immediateDominators_[w] =
+                immediateDominators_[immediateDominators_[w]];
+        }
+    }
+
+    // Root has no immediate dominator
+    if (!dfsOrder_.empty()) {
+        immediateDominators_[dfsOrder_[0]] = nullptr;
+    }
+}
+
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeFullDominatorsFromImmediate() {
+    dominators_.clear();
+
+    // Build dominators from immediate dominator relationships
+    for (auto* BB : dfsOrder_) {
+        BBSet doms;
+        auto* current = BB;
+
+        // Walk up the immediate dominator tree
+        while (current) {
+            doms.insert(current);
+            current = immediateDominators_[current];
+        }
+
+        dominators_[BB] = std::move(doms);
     }
 }
 

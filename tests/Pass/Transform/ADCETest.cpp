@@ -2430,7 +2430,6 @@ merge:
 TEST_F(ADCETest, ConditionalWithInlineCall) {
     auto intType = ctx->getIntegerType(32);
     auto voidType = ctx->getVoidType();
-    auto i1Type = ctx->getIntegerType(1);
 
     // Create external putint function
     auto putintType = FunctionType::get(voidType, {intType});

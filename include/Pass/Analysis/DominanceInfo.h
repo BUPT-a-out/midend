@@ -33,10 +33,32 @@ class DominanceInfoBase : public AnalysisResult {
     mutable bool useVirtualBlock_ = false;
     mutable std::unordered_map<BasicBlock*, BBSet> dominatedCache_;
 
+    // Lengauer-Tarjan algorithm data structures
+    struct LTNode {
+        BasicBlock* block;
+        int dfsNum;
+        BasicBlock* parent;    // DFS tree parent
+        BasicBlock* ancestor;  // Union-find ancestor
+        BasicBlock* label;     // For path compression
+        BasicBlock* sdom;      // Semi-dominator
+    };
+
+    std::unordered_map<BasicBlock*, LTNode> ltNodes_;
+    BBVector dfsOrder_;
+
     void computeDominators();
-    void computeImmediateDominators();
     void computeDominanceFrontier();
     void buildDominatorTree();
+
+    // Lengauer-Tarjan algorithm methods
+    void computeDominatorsLengauerTarjan();
+    void performDFS();
+    BasicBlock* compress(BasicBlock* v);
+    BasicBlock* eval(BasicBlock* v);
+    void link(BasicBlock* v, BasicBlock* w);
+    void computeSemiDominators();
+    void finalizeDominators();
+    void computeFullDominatorsFromImmediate();
 
    public:
     explicit DominanceInfoBase(Function* F);
