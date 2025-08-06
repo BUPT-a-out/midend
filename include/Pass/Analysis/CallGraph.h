@@ -234,6 +234,7 @@ class CallGraph : public AnalysisResult {
     SCCVector sccs_;
     std::unordered_map<Function*, size_t> functionToSCC_;
     std::unordered_map<Function*, bool> sideEffectCache_;
+    mutable std::unordered_map<Function*, bool> pureCache_;
     mutable std::unique_ptr<SuperGraph> superGraph_;
 
     // Tarjan's algorithm state
@@ -251,6 +252,8 @@ class CallGraph : public AnalysisResult {
     void analyzeSideEffects();
     bool hasSideEffectsInternal(Function* F,
                                 std::unordered_set<Function*>& visited);
+    bool isPureFunctionInternal(Function* F,
+                                std::unordered_set<Function*>& visited) const;
     void buildSuperGraph() const;
 
    public:
@@ -289,6 +292,9 @@ class CallGraph : public AnalysisResult {
         auto it = sideEffectCache_.find(F);
         return it != sideEffectCache_.end() ? it->second : true;
     }
+
+    /// Check if a function is pure
+    bool isPureFunction(Function* F) const;
 
     /// Get the SCC containing a function
     const std::unordered_set<Function*>* getSCC(Function* F) const {

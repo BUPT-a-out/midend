@@ -505,7 +505,7 @@ bool GVNPass::processFunctionCall(Instruction* Call) {
 
 bool GVNPass::isPureFunction(Function* F) {
     if (!F || !CG) return false;
-    return !CG->hasSideEffects(F);
+    return CG->isPureFunction(F);
 }
 
 GVNPass::Expression GVNPass::createCallExpression(Instruction* Call) {

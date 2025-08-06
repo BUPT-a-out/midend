@@ -1211,4 +1211,337 @@ TEST_F(CallGraphTest, SuperGraphReverseTopologicalIteration) {
     EXPECT_FALSE(sn23->getPredecessors().empty());  // Has predecessors
 }
 
+// Test isPureFunction - Basic pure function
+TEST_F(CallGraphTest, IsPureFunction_BasicPure) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(1);
+
+    CallGraph cg(builder.getModule(), am.get());
+    Function* f0 = builder.getFunction(0);
+
+    // Function just returns argument (no side effects, no calls, no loads)
+    EXPECT_TRUE(cg.isPureFunction(f0));
+}
+
+// Test isPureFunction - Function with global variable load
+TEST_F(CallGraphTest, IsPureFunction_GlobalLoad) {
+    CallGraphTestBuilder builder;
+    Context* context = builder.getContext();
+    Module* module = builder.getModule();
+
+    // Create function manually to add a load from global
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* func = Function::Create(fnTy, "test_func", module);
+
+    // Create global variable
+    auto* globalVar =
+        GlobalVariable::Create(int32Ty, false, GlobalVariable::ExternalLinkage,
+                               nullptr, "global_var", module);
+
+    // Build function that loads from global
+    auto* bb = BasicBlock::Create(context, "entry", func);
+    IRBuilder localBuilder(context);
+    localBuilder.setInsertPoint(bb);
+    auto* loadedValue = localBuilder.createLoad(globalVar);
+    localBuilder.createRet(loadedValue);
+
+    CallGraph cg(module, am.get());
+
+    // Function should be impure due to global load
+    EXPECT_FALSE(cg.isPureFunction(func));
+}
+
+// Test isPureFunction - Function with function argument load
+TEST_F(CallGraphTest, IsPureFunction_ArgumentLoad) {
+    CallGraphTestBuilder builder;
+    Context* context = builder.getContext();
+    Module* module = builder.getModule();
+
+    // Create function that takes pointer argument and loads from it
+    auto* int32Ty = context->getInt32Type();
+    auto* int32PtrTy = context->getPointerType(int32Ty);
+    auto* fnTy = FunctionType::get(int32Ty, {int32PtrTy});
+    auto* func = Function::Create(fnTy, "test_func", module);
+
+    // Build function that loads from argument
+    auto* bb = BasicBlock::Create(context, "entry", func);
+    IRBuilder localBuilder(context);
+    localBuilder.setInsertPoint(bb);
+    auto* loadedValue = localBuilder.createLoad(func->getArg(0));
+    localBuilder.createRet(loadedValue);
+
+    CallGraph cg(module, am.get());
+
+    // Function should be impure due to argument load
+    EXPECT_FALSE(cg.isPureFunction(func));
+}
+
+// Test isPureFunction - Function calling pure function
+TEST_F(CallGraphTest, IsPureFunction_CallPure) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(2);
+    builder.addCall(0, 1);  // func0 calls func1
+
+    CallGraph cg(builder.getModule(), am.get());
+    Function* f0 = builder.getFunction(0);
+    Function* f1 = builder.getFunction(1);
+
+    // Both functions should be pure (f1 is leaf, f0 calls pure f1)
+    EXPECT_TRUE(cg.isPureFunction(f1));
+    EXPECT_TRUE(cg.isPureFunction(f0));
+}
+
+// Test isPureFunction - Function calling impure function
+TEST_F(CallGraphTest, IsPureFunction_CallImpure) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(2);
+    builder.addCall(0, 1);     // func0 calls func1
+    builder.addSideEffect(1);  // func1 has side effects
+
+    CallGraph cg(builder.getModule(), am.get());
+    Function* f0 = builder.getFunction(0);
+    Function* f1 = builder.getFunction(1);
+
+    // f1 should be impure, f0 should also be impure due to calling f1
+    EXPECT_FALSE(cg.isPureFunction(f1));
+    EXPECT_FALSE(cg.isPureFunction(f0));
+}
+
+// Test isPureFunction - Pure recursive function (self-recursion)
+TEST_F(CallGraphTest, IsPureFunction_PureSelfRecursion) {
+    CallGraphTestBuilder builder;
+    Context* context = builder.getContext();
+    Module* module = builder.getModule();
+
+    // Create a recursive function that doesn't have side effects
+    auto* int32Ty = context->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* func = Function::Create(fnTy, "recursive_func", module);
+
+    auto* bb = BasicBlock::Create(context, "entry", func);
+    IRBuilder localBuilder(context);
+    localBuilder.setInsertPoint(bb);
+
+    // Simple recursive call (without termination condition for test purposes)
+    auto* callResult = localBuilder.createCall(func, {func->getArg(0)});
+    localBuilder.createRet(callResult);
+
+    CallGraph cg(module, am.get());
+
+    // Even though it's recursive, it should be pure (no side effects, no loads)
+    EXPECT_TRUE(cg.isPureFunction(func));
+}
+
+// Test isPureFunction - Impure recursive function
+TEST_F(CallGraphTest, IsPureFunction_ImpureSelfRecursion) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(1);
+    builder.addCall(0, 0);     // Self-recursive
+    builder.addSideEffect(0);  // Add side effects
+
+    CallGraph cg(builder.getModule(), am.get());
+    Function* f0 = builder.getFunction(0);
+
+    // Should be impure due to side effects
+    EXPECT_FALSE(cg.isPureFunction(f0));
+}
+
+// Test isPureFunction - Pure mutual recursion
+TEST_F(CallGraphTest, IsPureFunction_PureMutualRecursion) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(2);
+    builder.addCall(0, 1);  // func0 calls func1
+    builder.addCall(1, 0);  // func1 calls func0
+
+    CallGraph cg(builder.getModule(), am.get());
+    Function* f0 = builder.getFunction(0);
+    Function* f1 = builder.getFunction(1);
+
+    // Both should be pure (no side effects, just mutual recursion)
+    EXPECT_TRUE(cg.isPureFunction(f0));
+    EXPECT_TRUE(cg.isPureFunction(f1));
+}
+
+// Test isPureFunction - Impure mutual recursion
+TEST_F(CallGraphTest, IsPureFunction_ImpureMutualRecursion) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(2);
+    builder.addCall(0, 1);     // func0 calls func1
+    builder.addCall(1, 0);     // func1 calls func0
+    builder.addSideEffect(1);  // func1 has side effects
+
+    CallGraph cg(builder.getModule(), am.get());
+    Function* f0 = builder.getFunction(0);
+    Function* f1 = builder.getFunction(1);
+
+    // Both should be impure due to f1's side effects
+    EXPECT_FALSE(cg.isPureFunction(f1));
+    EXPECT_FALSE(cg.isPureFunction(f0));
+}
+
+// Test isPureFunction - Indirect calls
+TEST_F(CallGraphTest, IsPureFunction_IndirectCall) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(1);
+
+    Function* caller = builder.getFunction(0);
+
+    // Replace function body with indirect call
+    BasicBlock* bb = &caller->front();
+    while (!bb->empty()) {
+        bb->back().eraseFromParent();
+    }
+
+    IRBuilder localBuilder(bb);
+    // Create indirect call (null callee)
+    auto* int32Ty = builder.getContext()->getInt32Type();
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* indirectCall =
+        CallInst::Create(fnTy, nullptr, {caller->getArg(0)}, "indirect");
+    bb->push_back(indirectCall);
+    localBuilder.setInsertPoint(bb);
+    localBuilder.createRet(caller->getArg(0));
+
+    CallGraph cg(builder.getModule(), am.get());
+
+    // Indirect calls should make function impure
+    EXPECT_FALSE(cg.isPureFunction(caller));
+}
+
+// Test isPureFunction - External/declaration functions
+TEST_F(CallGraphTest, IsPureFunction_ExternalFunction) {
+    CallGraphTestBuilder builder;
+    Function* external = builder.addExternalFunction("external_func");
+
+    CallGraph cg(builder.getModule(), am.get());
+
+    // External functions should be impure
+    EXPECT_FALSE(cg.isPureFunction(external));
+}
+
+// Test isPureFunction - Function calling external function
+TEST_F(CallGraphTest, IsPureFunction_CallExternal) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(1);
+    Function* external = builder.addExternalFunction("external_func");
+    builder.addExternalCall(0, external);
+
+    CallGraph cg(builder.getModule(), am.get());
+    Function* caller = builder.getFunction(0);
+
+    // Function calling external should be impure
+    EXPECT_FALSE(cg.isPureFunction(caller));
+}
+
+// Test isPureFunction - GEP instruction with global base
+TEST_F(CallGraphTest, IsPureFunction_GEPGlobal) {
+    CallGraphTestBuilder builder;
+    Context* context = builder.getContext();
+    Module* module = builder.getModule();
+
+    // Create function with GEP and load from global array
+    auto* int32Ty = context->getInt32Type();
+    auto* arrayTy = ArrayType::get(int32Ty, 10);
+    auto* fnTy = FunctionType::get(int32Ty, {int32Ty});
+    auto* func = Function::Create(fnTy, "test_func", module);
+
+    // Create global array
+    auto* globalArray =
+        GlobalVariable::Create(arrayTy, false, GlobalVariable::ExternalLinkage,
+                               nullptr, "global_array", module);
+
+    // Build function with GEP and load
+    auto* bb = BasicBlock::Create(context, "entry", func);
+    IRBuilder localBuilder(context);
+    localBuilder.setInsertPoint(bb);
+
+    // Create GEP: ptr = &global_array[index]
+    std::vector<Value*> indices = {func->getArg(0)};
+    auto* gepInst = localBuilder.createGEP(arrayTy, globalArray, indices);
+
+    // Load from GEP result
+    auto* loadedValue = localBuilder.createLoad(gepInst);
+    localBuilder.createRet(loadedValue);
+
+    CallGraph cg(module, am.get());
+
+    // Should be impure due to loading from global (even through GEP)
+    EXPECT_FALSE(cg.isPureFunction(func));
+}
+
+// Test isPureFunction - GEP instruction with argument base
+TEST_F(CallGraphTest, IsPureFunction_GEPArgument) {
+    CallGraphTestBuilder builder;
+    Context* context = builder.getContext();
+    Module* module = builder.getModule();
+
+    // Create function with GEP and load from argument array
+    auto* int32Ty = context->getInt32Type();
+    auto* arrayTy = ArrayType::get(int32Ty, 10);
+    auto* arrayPtrTy = context->getPointerType(arrayTy);
+    auto* fnTy = FunctionType::get(int32Ty, {arrayPtrTy, int32Ty});
+    auto* func = Function::Create(fnTy, "test_func", module);
+
+    // Build function with GEP and load from argument
+    auto* bb = BasicBlock::Create(context, "entry", func);
+    IRBuilder localBuilder(context);
+    localBuilder.setInsertPoint(bb);
+
+    // Create GEP: ptr = &arg_array[index]
+    std::vector<Value*> indices = {func->getArg(1)};
+    auto* gepInst = localBuilder.createGEP(arrayTy, func->getArg(0), indices);
+
+    // Load from GEP result
+    auto* loadedValue = localBuilder.createLoad(gepInst);
+    localBuilder.createRet(loadedValue);
+
+    CallGraph cg(module, am.get());
+
+    // Should be impure due to loading from argument (even through GEP)
+    EXPECT_FALSE(cg.isPureFunction(func));
+}
+
+// Test isPureFunction - Complex call chain with mixed purity
+TEST_F(CallGraphTest, IsPureFunction_ComplexCallChain) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(5);
+
+    // Chain: 0 -> 1 -> 2 -> 3 -> 4
+    builder.addCall(0, 1);
+    builder.addCall(1, 2);
+    builder.addCall(2, 3);
+    builder.addCall(3, 4);
+
+    // Only func4 has side effects
+    builder.addSideEffect(4);
+
+    CallGraph cg(builder.getModule(), am.get());
+
+    // All functions should be impure due to transitivity
+    for (size_t i = 0; i < 5; ++i) {
+        EXPECT_FALSE(cg.isPureFunction(builder.getFunction(i)));
+    }
+}
+
+// Test isPureFunction - Large pure SCC
+TEST_F(CallGraphTest, IsPureFunction_LargePureSCC) {
+    CallGraphTestBuilder builder;
+    builder.defineFunctions(5);
+
+    // Create cycle: 0 -> 1 -> 2 -> 3 -> 4 -> 0
+    builder.addCall(0, 1);
+    builder.addCall(1, 2);
+    builder.addCall(2, 3);
+    builder.addCall(3, 4);
+    builder.addCall(4, 0);
+
+    CallGraph cg(builder.getModule(), am.get());
+
+    // All functions in SCC should be pure
+    for (size_t i = 0; i < 5; ++i) {
+        EXPECT_TRUE(cg.isPureFunction(builder.getFunction(i)));
+    }
+}
+
 }  // namespace

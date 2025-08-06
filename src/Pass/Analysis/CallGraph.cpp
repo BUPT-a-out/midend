@@ -169,6 +169,96 @@ bool CallGraph::hasSideEffectsInternal(Function* F,
     return hasSideEffect;
 }
 
+bool CallGraph::isPureFunction(Function* F) const {
+    auto it = pureCache_.find(F);
+    if (it != pureCache_.end()) {
+        return it->second;
+    }
+
+    std::unordered_set<Function*> visited;
+    return isPureFunctionInternal(F, visited);
+}
+
+bool CallGraph::isPureFunctionInternal(
+    Function* F, std::unordered_set<Function*>& visited) const {
+    auto it = pureCache_.find(F);
+    if (it != pureCache_.end()) {
+        return it->second;
+    }
+
+    // If we're visiting this function, assume it's pure for now to break cycles
+    // This will be corrected if we find evidence it's not pure
+    if (visited.count(F)) {
+        return true;
+    }
+
+    visited.insert(F);
+
+    // Must not have side effects
+    if (hasSideEffects(F)) {
+        pureCache_[F] = false;
+        return false;
+    }
+
+    if (F->isDeclaration()) {
+        pureCache_[F] = false;
+        return false;
+    }
+
+    AliasAnalysis::Result* aliasInfo = nullptr;
+    if (analysisManager_) {
+        aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>(
+            "AliasAnalysis", *F);
+    }
+
+    for (BasicBlock* BB : *F) {
+        for (Instruction* I : *BB) {
+            if (auto* load = dyn_cast<LoadInst>(I)) {
+                Value* ptr = load->getPointerOperand();
+
+                // Walk through GEPs to find the base pointer
+                while (auto* gep = dyn_cast<GetElementPtrInst>(ptr)) {
+                    ptr = gep->getPointerOperand();
+                }
+
+                // Check if loading from global variable
+                if (isa<GlobalVariable>(ptr)) {
+                    pureCache_[F] = false;
+                    return false;
+                }
+
+                if (aliasInfo) {
+                    for (auto it = F->arg_begin(); it != F->arg_end(); ++it) {
+                        Argument* arg = it->get();
+                        if (aliasInfo->alias(arg, ptr) !=
+                            AliasAnalysis::AliasResult::NoAlias) {
+                            pureCache_[F] = false;
+                            return false;
+                        }
+                    }
+                } else {
+                    return false;
+                }
+            }
+
+            if (auto* call = dyn_cast<CallInst>(I)) {
+                if (Function* callee = call->getCalledFunction()) {
+                    if (!isPureFunctionInternal(callee, visited)) {
+                        pureCache_[F] = false;
+                        return false;
+                    }
+                } else {
+                    pureCache_[F] = false;
+                    return false;
+                }
+            }
+        }
+    }
+
+    pureCache_[F] = true;
+    return true;
+}
+
 CallGraph::CallChainIterator::CallChainIterator(Function* F,
                                                 const CallGraph& CG)
     : current_(nullptr) {
@@ -345,6 +435,8 @@ void CallGraph::print() const {
         std::cout << "  In SCC: " << (isInSCC(F) ? "Yes" : "No") << "\n";
         std::cout << "  Has side effects: "
                   << (hasSideEffects(F) ? "Yes" : "No") << "\n";
+        std::cout << "  Is pure function: "
+                  << (isPureFunction(F) ? "Yes" : "No") << "\n";
         std::cout << "\n";
     }
 
