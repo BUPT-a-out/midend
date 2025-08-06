@@ -43,6 +43,33 @@ std::vector<BasicBlock*> DominanceInfoBase<IsPostDom>::getPreds(
         if (exitBlocksSet_.find(BB) != exitBlocksSet_.end()) {
             return {getVirtualExit()};
         }
+        // In the reverse CFG, handle exit block predecessors
+        if (useVirtualBlock_ && exitBlocks_.size() > 1) {
+            auto successors = BB->getSuccessors();
+            int exitCount = 0;
+            int nonExitCount = 0;
+            for (auto* succ : successors) {
+                if (exitBlocksSet_.find(succ) != exitBlocksSet_.end()) {
+                    exitCount++;
+                } else {
+                    nonExitCount++;
+                }
+            }
+            
+            // Replace with virtual exit if:
+            // 1. There are multiple exit successors, OR
+            // 2. There are both exit and non-exit successors (mixed paths)
+            if (exitCount > 1 || (exitCount > 0 && nonExitCount > 0)) {
+                std::vector<BasicBlock*> preds;
+                for (auto* succ : successors) {
+                    if (exitBlocksSet_.find(succ) == exitBlocksSet_.end()) {
+                        preds.push_back(succ);
+                    }
+                }
+                preds.push_back(const_cast<BasicBlock*>(getVirtualExit()));
+                return preds;
+            }
+        }
         return BB->getSuccessors();
     } else {
         return BB->getPredecessors();
@@ -314,6 +341,7 @@ void DominanceInfoBase<IsPostDom>::finalizeDominators() {
     if (!dfsOrder_.empty()) {
         immediateDominators_[dfsOrder_[0]] = nullptr;
     }
+    
 }
 
 template <bool IsPostDom>
