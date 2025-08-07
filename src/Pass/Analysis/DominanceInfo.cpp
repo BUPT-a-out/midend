@@ -9,7 +9,6 @@
 #include <unordered_set>
 
 #include "IR/IRBuilder.h"
-#include "IR/Instructions/TerminatorOps.h"
 
 namespace midend {
 
@@ -17,7 +16,7 @@ template <bool IsPostDom>
 DominanceInfoBase<IsPostDom>::DominanceInfoBase(Function* F) : function_(F) {
     if (!F || F->empty()) return;
 
-    computeDominators();
+    computeLengauerTarjan();
     computeDominanceFrontier();
     buildDominatorTree();
 }
@@ -42,33 +41,6 @@ std::vector<BasicBlock*> DominanceInfoBase<IsPostDom>::getPreds(
         }
         if (exitBlocksSet_.find(BB) != exitBlocksSet_.end()) {
             return {getVirtualExit()};
-        }
-        // In the reverse CFG, handle exit block predecessors
-        if (useVirtualBlock_ && exitBlocks_.size() > 1) {
-            auto successors = BB->getSuccessors();
-            int exitCount = 0;
-            int nonExitCount = 0;
-            for (auto* succ : successors) {
-                if (exitBlocksSet_.find(succ) != exitBlocksSet_.end()) {
-                    exitCount++;
-                } else {
-                    nonExitCount++;
-                }
-            }
-            
-            // Replace with virtual exit if:
-            // 1. There are multiple exit successors, OR
-            // 2. There are both exit and non-exit successors (mixed paths)
-            if (exitCount > 1 || (exitCount > 0 && nonExitCount > 0)) {
-                std::vector<BasicBlock*> preds;
-                for (auto* succ : successors) {
-                    if (exitBlocksSet_.find(succ) == exitBlocksSet_.end()) {
-                        preds.push_back(succ);
-                    }
-                }
-                preds.push_back(const_cast<BasicBlock*>(getVirtualExit()));
-                return preds;
-            }
         }
         return BB->getSuccessors();
     } else {
@@ -163,202 +135,139 @@ bool DominanceInfoBase<IsPostDom>::isVirtualExit(BasicBlock* BB) const {
     }
 }
 
+// DFS numbering for Lengauer-Tarjan algorithm
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::dfsNumbering(BasicBlock* v,
+                                                LengauerTarjanData& data) {
+    data.dfn[v] = ++data.dfsNum;
+    data.vertex.resize(data.dfsNum + 1);
+    data.vertex[data.dfsNum] = v;
+    data.label[v] = v;
+    data.sdom[v] = v;
+    data.ancestor[v] = nullptr;
+
+    for (auto* w : getSuccs(v)) {
+        if (data.dfn.find(w) == data.dfn.end()) {
+            data.parent[w] = v;
+            dfsNumbering(w, data);
+        }
+    }
+}
+
+// Link operation for DSU in Lengauer-Tarjan
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::link(BasicBlock* v, BasicBlock* w,
+                                        LengauerTarjanData& data) {
+    data.ancestor[w] = v;
+}
+
+// Compress path in DSU and update minimum sdom label
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::compress(BasicBlock* v,
+                                            LengauerTarjanData& data) {
+    if (data.ancestor[data.ancestor[v]] != nullptr) {
+        compress(data.ancestor[v], data);
+        if (data.dfn[data.sdom[data.label[data.ancestor[v]]]] <
+            data.dfn[data.sdom[data.label[v]]]) {
+            data.label[v] = data.label[data.ancestor[v]];
+        }
+        data.ancestor[v] = data.ancestor[data.ancestor[v]];
+    }
+}
+
+// Eval operation for finding minimum sdom on path
+template <bool IsPostDom>
+BasicBlock* DominanceInfoBase<IsPostDom>::eval(BasicBlock* v,
+                                               LengauerTarjanData& data) {
+    if (data.ancestor[v] == nullptr) {
+        return v;
+    }
+    compress(v, data);
+    return data.label[v];
+}
+
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeLengauerTarjan() {
+    if (function_->empty()) return;
+
+    LengauerTarjanData data;
+    auto* entry = getEntry();
+
+    // Step 1: DFS numbering
+    dfsNumbering(entry, data);
+
+    // Step 2: Compute semi-dominators in reverse DFS order
+    for (int i = data.dfsNum; i >= 2; --i) {
+        BasicBlock* w = data.vertex[i];
+
+        // Consider all predecessors of w
+        for (auto* v : getPreds(w)) {
+            if (data.dfn.find(v) == data.dfn.end())
+                continue;  // Skip unreachable blocks
+
+            BasicBlock* u = eval(v, data);
+            if (data.dfn[data.sdom[u]] < data.dfn[data.sdom[w]]) {
+                data.sdom[w] = data.sdom[u];
+            }
+        }
+
+        // Add w to bucket of its semidominator
+        data.bucket[data.sdom[w]].push_back(w);
+        link(data.parent[w], w, data);
+
+        // Process vertices in parent's bucket
+        for (auto* v : data.bucket[data.parent[w]]) {
+            BasicBlock* u = eval(v, data);
+            if (data.sdom[u] == data.sdom[v]) {
+                data.idom[v] = data.parent[w];
+            } else {
+                data.idom[v] = u;
+            }
+        }
+        data.bucket[data.parent[w]].clear();
+    }
+
+    // Step 3: Finalize immediate dominators
+    for (int i = 2; i <= data.dfsNum; ++i) {
+        BasicBlock* w = data.vertex[i];
+        if (data.idom[w] != data.sdom[w]) {
+            data.idom[w] = data.idom[data.idom[w]];
+        }
+    }
+
+    // Step 4: Fill in the immediate dominators map
+    immediateDominators_.clear();
+    immediateDominators_[entry] = nullptr;
+    for (int i = 2; i <= data.dfsNum; ++i) {
+        BasicBlock* w = data.vertex[i];
+        immediateDominators_[w] = data.idom[w];
+    }
+
+    // Step 5: Compute full dominator sets from immediate dominators
+    computeDominators();
+}
+
+// Compute full dominator sets from immediate dominators
 template <bool IsPostDom>
 void DominanceInfoBase<IsPostDom>::computeDominators() {
     if (function_->empty()) return;
-    computeDominatorsLengauerTarjan();
-}
 
-template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::computeDominatorsLengauerTarjan() {
-    ltNodes_.clear();
-    dfsOrder_.clear();
-    immediateDominators_.clear();
     dominators_.clear();
 
-    // Step 1: DFS numbering and tree construction
-    performDFS();
-
-    // Step 2: Compute semi-dominators and immediate dominators
-    computeSemiDominators();
-
-    // Step 3: Finalize immediate dominators
-    finalizeDominators();
-
-    // Step 4: Compute full dominators set from immediate dominators
-    computeFullDominatorsFromImmediate();
-}
-
-template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::performDFS() {
-    if (function_->empty()) return;
-
+    // Entry dominates itself
     auto* entry = getEntry();
-    if (!entry) return;
+    dominators_[entry].insert(entry);
 
-    std::unordered_set<BasicBlock*> visited;
-    std::stack<std::pair<BasicBlock*, int>> stack;
+    // For each block, compute its dominators by walking up the idom chain
+    for (auto& BB : *function_) {
+        if (BB == entry) continue;
 
-    int dfsNum = 0;
-    stack.push({entry, -1});
-
-    while (!stack.empty()) {
-        auto current = stack.top();
-        stack.pop();
-        auto* bb = current.first;
-        int parentIdx = current.second;
-
-        if (visited.count(bb)) continue;
-        visited.insert(bb);
-
-        LTNode node;
-        node.block = bb;
-        node.dfsNum = dfsNum++;
-        node.parent = (parentIdx >= 0) ? dfsOrder_[parentIdx] : nullptr;
-        node.ancestor = nullptr;
-        node.label = bb;
-        node.sdom = bb;
-
-        ltNodes_[bb] = node;
-        dfsOrder_.push_back(bb);
-
-        auto successors = getSuccs(bb);
-        for (auto it = successors.rbegin(); it != successors.rend(); ++it) {
-            if (!visited.count(*it)) {
-                stack.push({*it, node.dfsNum});
-            }
-        }
-    }
-}
-
-template <bool IsPostDom>
-BasicBlock* DominanceInfoBase<IsPostDom>::compress(BasicBlock* v) {
-    auto& vNode = ltNodes_[v];
-    if (vNode.ancestor && ltNodes_[vNode.ancestor].ancestor) {
-        compress(vNode.ancestor);
-
-        auto& vAncNode = ltNodes_[vNode.ancestor];
-        auto& vLabelNode = ltNodes_[vNode.label];
-        auto& vAncLabelNode = ltNodes_[vAncNode.label];
-
-        if (vAncLabelNode.dfsNum < vLabelNode.dfsNum) {
-            vNode.label = vAncNode.label;
-        }
-        vNode.ancestor = vAncNode.ancestor;
-    }
-    return vNode.label;
-}
-
-template <bool IsPostDom>
-BasicBlock* DominanceInfoBase<IsPostDom>::eval(BasicBlock* v) {
-    auto& vNode = ltNodes_[v];
-    if (!vNode.ancestor) {
-        return v;
-    } else {
-        compress(v);
-        return vNode.label;
-    }
-}
-
-template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::link(BasicBlock* v, BasicBlock* w) {
-    ltNodes_[w].ancestor = v;
-}
-
-template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::computeSemiDominators() {
-    std::vector<std::vector<BasicBlock*>> bucket(dfsOrder_.size());
-
-    // Process nodes in reverse DFS order (except root)
-    for (int i = dfsOrder_.size() - 1; i >= 1; --i) {
-        auto* w = dfsOrder_[i];
-        auto& wNode = ltNodes_[w];
-
-        // Step 1: Compute semi-dominator
-        auto predecessors = getPreds(w);
-        int minSdomDfs = INT_MAX;
-        BasicBlock* semiDom = nullptr;
-
-        for (auto* v : predecessors) {
-            if (ltNodes_.count(v) == 0) continue;
-
-            BasicBlock* u = eval(v);
-            auto& uNode = ltNodes_[u];
-            int sdomDfs = ltNodes_[uNode.sdom].dfsNum;
-
-            if (sdomDfs < minSdomDfs) {
-                minSdomDfs = sdomDfs;
-                semiDom = uNode.sdom;
-            }
-        }
-
-        if (semiDom) {
-            wNode.sdom = semiDom;
-
-            // Step 2: Add w to bucket of its semi-dominator
-            int sdomIdx = ltNodes_[semiDom].dfsNum;
-            bucket[sdomIdx].push_back(w);
-        }
-
-        // Link w to its parent in DFS tree
-        if (wNode.parent) {
-            link(wNode.parent, w);
-        }
-
-        // Step 3: Process bucket of parent
-        if (wNode.parent) {
-            int parentIdx = ltNodes_[wNode.parent].dfsNum;
-            for (auto* v : bucket[parentIdx]) {
-                BasicBlock* u = eval(v);
-                auto& vNode = ltNodes_[v];
-                auto& uNode = ltNodes_[u];
-
-                if (ltNodes_[uNode.sdom].dfsNum < ltNodes_[vNode.sdom].dfsNum) {
-                    immediateDominators_[v] = u;
-                } else {
-                    immediateDominators_[v] = wNode.parent;
-                }
-            }
-            bucket[parentIdx].clear();
-        }
-    }
-}
-
-template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::finalizeDominators() {
-    // Process nodes in DFS order (skip root)
-    for (size_t i = 1; i < dfsOrder_.size(); ++i) {
-        auto* w = dfsOrder_[i];
-        auto& wNode = ltNodes_[w];
-
-        if (immediateDominators_[w] != wNode.sdom) {
-            immediateDominators_[w] =
-                immediateDominators_[immediateDominators_[w]];
-        }
-    }
-
-    // Root has no immediate dominator
-    if (!dfsOrder_.empty()) {
-        immediateDominators_[dfsOrder_[0]] = nullptr;
-    }
-    
-}
-
-template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::computeFullDominatorsFromImmediate() {
-    dominators_.clear();
-
-    // Build dominators from immediate dominator relationships
-    for (auto* BB : dfsOrder_) {
         BBSet doms;
-        auto* current = BB;
-
-        // Walk up the immediate dominator tree
-        while (current) {
+        BasicBlock* current = BB;
+        while (current != nullptr) {
             doms.insert(current);
             current = immediateDominators_[current];
         }
-
         dominators_[BB] = std::move(doms);
     }
 }

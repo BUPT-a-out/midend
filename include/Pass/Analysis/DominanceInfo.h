@@ -34,31 +34,30 @@ class DominanceInfoBase : public AnalysisResult {
     mutable std::unordered_map<BasicBlock*, BBSet> dominatedCache_;
 
     // Lengauer-Tarjan algorithm data structures
-    struct LTNode {
-        BasicBlock* block;
-        int dfsNum;
-        BasicBlock* parent;    // DFS tree parent
-        BasicBlock* ancestor;  // Union-find ancestor
-        BasicBlock* label;     // For path compression
-        BasicBlock* sdom;      // Semi-dominator
+    struct LengauerTarjanData {
+        std::unordered_map<BasicBlock*, int> dfn;  // DFS number
+        std::vector<BasicBlock*> vertex;  // vertex[i] = block with DFS number i
+        std::unordered_map<BasicBlock*, BasicBlock*> parent;  // DFS tree parent
+        std::unordered_map<BasicBlock*, BasicBlock*> sdom;    // Semi-dominator
+        std::unordered_map<BasicBlock*, BasicBlock*>
+            idom;  // Immediate dominator
+        std::unordered_map<BasicBlock*, BasicBlock*> ancestor;  // For DSU
+        std::unordered_map<BasicBlock*, BasicBlock*> label;  // For DSU minimum
+        std::unordered_map<BasicBlock*, std::vector<BasicBlock*>>
+            bucket;  // For deferred evaluation
+        int dfsNum = 0;
     };
-
-    std::unordered_map<BasicBlock*, LTNode> ltNodes_;
-    BBVector dfsOrder_;
 
     void computeDominators();
     void computeDominanceFrontier();
     void buildDominatorTree();
 
-    // Lengauer-Tarjan algorithm methods
-    void computeDominatorsLengauerTarjan();
-    void performDFS();
-    BasicBlock* compress(BasicBlock* v);
-    BasicBlock* eval(BasicBlock* v);
-    void link(BasicBlock* v, BasicBlock* w);
-    void computeSemiDominators();
-    void finalizeDominators();
-    void computeFullDominatorsFromImmediate();
+    // Lengauer-Tarjan algorithm helpers
+    void dfsNumbering(BasicBlock* v, LengauerTarjanData& data);
+    void link(BasicBlock* v, BasicBlock* w, LengauerTarjanData& data);
+    BasicBlock* eval(BasicBlock* v, LengauerTarjanData& data);
+    void compress(BasicBlock* v, LengauerTarjanData& data);
+    void computeLengauerTarjan();
 
    public:
     explicit DominanceInfoBase(Function* F);
