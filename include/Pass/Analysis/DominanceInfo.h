@@ -50,6 +50,10 @@ class DominanceInfoBase : public AnalysisResult {
     void computeDominanceFrontier();
     void buildDominatorTree();
 
+    // Iterative algorithm methods (for post-dominance)
+    void computeDominatorsIterative();
+    void computeImmediateDominatorsFromDominators();
+
     // Lengauer-Tarjan algorithm methods
     void computeDominatorsLengauerTarjan();
     void performDFS();

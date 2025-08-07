@@ -55,7 +55,7 @@ std::vector<BasicBlock*> DominanceInfoBase<IsPostDom>::getPreds(
                     nonExitCount++;
                 }
             }
-            
+
             // Replace with virtual exit if:
             // 1. There are multiple exit successors, OR
             // 2. There are both exit and non-exit successors (mixed paths)
@@ -115,23 +115,14 @@ BasicBlock* DominanceInfoBase<IsPostDom>::getVirtualExit() const {
             // Only create virtual exit if there are multiple exit blocks
             if (exitBlocks_.size() == 1) {
                 virtualExit_ = exitBlocks_[0];
-            } else {
+            } else if (exitBlocks_.size() > 1) {
                 virtualExit_ = BasicBlock::Create(function_->getContext(),
                                                   "_virtual_exit");
                 virtualExit_->isVirtual = true;
                 IRBuilder builder(virtualExit_);
                 builder.createRetVoid();
                 useVirtualBlock_ = true;
-                if (exitBlocks_.size() > 1) {
-                    exitBlocksSet_.insert(exitBlocks_.begin(),
-                                          exitBlocks_.end());
-                } else {
-                    // For infinite loops
-                    for (auto& BB : *function_) {
-                        exitBlocks_.push_back(BB);
-                        exitBlocksSet_.insert(BB);
-                    }
-                }
+                exitBlocksSet_.insert(exitBlocks_.begin(), exitBlocks_.end());
             }
             assert(virtualExit_);
         }
@@ -164,9 +155,115 @@ bool DominanceInfoBase<IsPostDom>::isVirtualExit(BasicBlock* BB) const {
 }
 
 template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeDominatorsIterative() {
+    dominators_.clear();
+    immediateDominators_.clear();
+
+    auto* entry = getEntry();
+    BBVector rpoBlocks = computeReversePostOrder();
+
+    for (auto* BB : rpoBlocks) {
+        dominators_[BB] = BBSet();
+    }
+
+    // Initialize: entry dominates only itself, others dominate all
+    dominators_[entry].insert(entry);
+    for (auto* BB : rpoBlocks) {
+        if (BB != entry) {
+            dominators_[BB] = BBSet(rpoBlocks.begin(), rpoBlocks.end());
+        }
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+
+        for (auto* BB : rpoBlocks) {
+            if (BB == entry) continue;
+
+            BBSet newDominators;
+
+            // Intersection of dominators of all predecessors
+            auto predecessors = getPreds(BB);
+            if (!predecessors.empty()) {
+                bool first = true;
+                for (auto* Pred : predecessors) {
+                    if (first) {
+                        newDominators = dominators_[Pred];
+                        first = false;
+                    } else {
+                        BBSet intersection;
+                        std::set_intersection(
+                            newDominators.begin(), newDominators.end(),
+                            dominators_[Pred].begin(), dominators_[Pred].end(),
+                            std::inserter(intersection, intersection.begin()));
+                        newDominators = std::move(intersection);
+                    }
+                }
+                newDominators.insert(BB);  // Block always dominates itself
+            } else {
+                // If no predecessors and not entry, this block is unreachable
+                newDominators.insert(BB);
+            }
+
+            if (newDominators != dominators_[BB]) {
+                dominators_[BB] = std::move(newDominators);
+                changed = true;
+            }
+        }
+    }
+
+    // Compute immediate dominators from dominators
+    computeImmediateDominatorsFromDominators();
+}
+
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeImmediateDominatorsFromDominators() {
+    auto* entry = getEntry();
+    immediateDominators_[entry] = nullptr;  // Entry has no immediate dominator
+
+    for (auto& BB : *function_) {
+        if (BB == entry) continue;
+
+        BasicBlock* idom = nullptr;
+        const auto& dominatorsOfBB = dominators_[BB];
+
+        for (auto* dominator : dominatorsOfBB) {
+            if (dominator == BB) continue;
+
+            // Check if this dominator is dominated by all other dominators
+            bool isImmediate = true;
+            for (auto* otherDom : dominatorsOfBB) {
+                if (otherDom == BB || otherDom == dominator) continue;
+
+                if (dominators_[dominator].find(otherDom) ==
+                    dominators_[dominator].end()) {
+                    isImmediate = false;
+                    break;
+                }
+            }
+
+            if (isImmediate) {
+                idom = dominator;
+                break;
+            }
+        }
+
+        immediateDominators_[BB] = idom;
+    }
+}
+
+template <bool IsPostDom>
 void DominanceInfoBase<IsPostDom>::computeDominators() {
     if (function_->empty()) return;
-    computeDominatorsLengauerTarjan();
+
+    // Use iterative algorithm for post-dominance (more reliable with complex
+    // control flow) Use Lengauer-Tarjan for regular dominance (faster)
+    if constexpr (IsPostDom) {
+        computeDominatorsIterative();
+    } else {
+        computeDominatorsLengauerTarjan();
+    }
 }
 
 template <bool IsPostDom>
@@ -341,7 +438,6 @@ void DominanceInfoBase<IsPostDom>::finalizeDominators() {
     if (!dfsOrder_.empty()) {
         immediateDominators_[dfsOrder_[0]] = nullptr;
     }
-    
 }
 
 template <bool IsPostDom>
