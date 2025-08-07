@@ -1243,8 +1243,8 @@ exit:
     EXPECT_EQ(IRPrinter().print(func),
               R"(define i32 @test_func(i32 %arg0, i32 %arg1) {
 entry:
-  %invariant2 = add i32 %arg0, 10
   %invariant1 = mul i32 %arg0, 2
+  %invariant2 = add i32 %arg0, 10
   br label %loop.header
 loop.header:
   %i = phi i32 [ 0, %entry ], [ %next_i, %merge ]

@@ -101,7 +101,10 @@ bool LICMPass::hoistLoopInvariants(Loop* L) {
         std::vector<Instruction*> toHoist;
 
         // Find all instructions that are loop invariant
-        for (BasicBlock* BB : L->getBlocks()) {
+        std::set<BasicBlock*> blocks(L->getBlocks().begin(),
+                                     L->getBlocks().end());
+
+        for (BasicBlock* BB : blocks) {
             for (auto it = BB->begin(); it != BB->end(); ++it) {
                 Instruction* I = *it;
 
