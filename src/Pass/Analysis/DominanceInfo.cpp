@@ -8,7 +8,6 @@
 #include <unordered_set>
 
 #include "IR/IRBuilder.h"
-#include "IR/Instructions/TerminatorOps.h"
 
 namespace midend {
 
@@ -16,8 +15,7 @@ template <bool IsPostDom>
 DominanceInfoBase<IsPostDom>::DominanceInfoBase(Function* F) : function_(F) {
     if (!F || F->empty()) return;
 
-    computeDominators();
-    computeImmediateDominators();
+    computeLengauerTarjan();
     computeDominanceFrontier();
     buildDominatorTree();
 }
@@ -136,104 +134,140 @@ bool DominanceInfoBase<IsPostDom>::isVirtualExit(BasicBlock* BB) const {
     }
 }
 
-// https://oi-wiki.org/graph/dominator-tree/#%E6%95%B0%E6%8D%AE%E6%B5%81%E8%BF%AD%E4%BB%A3%E6%B3%95
+// DFS numbering for Lengauer-Tarjan algorithm
 template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::computeDominators() {
-    if (function_->empty()) return;
+void DominanceInfoBase<IsPostDom>::dfsNumbering(BasicBlock* v,
+                                                LengauerTarjanData& data) {
+    data.dfn[v] = ++data.dfsNum;
+    data.vertex.resize(data.dfsNum + 1);
+    data.vertex[data.dfsNum] = v;
+    data.label[v] = v;
+    data.sdom[v] = v;
+    data.ancestor[v] = nullptr;
 
-    auto* entry = getEntry();
-
-    BBVector rpoBlocks = computeReversePostOrder();
-
-    for (auto* BB : rpoBlocks) {
-        dominators_[BB] = BBSet();
-    }
-
-    // Initialize: entry dominates only itself, others dominate all
-    dominators_[entry].insert(entry);
-    for (auto* BB : rpoBlocks) {
-        if (BB != entry) {
-            dominators_[BB] = BBSet(rpoBlocks.begin(), rpoBlocks.end());
-        }
-    }
-
-    bool changed = true;
-    while (changed) {
-        changed = false;
-
-        for (auto* BB : rpoBlocks) {
-            if (BB == entry) continue;
-
-            BBSet newDominators;
-
-            // Intersection of dominators of all predecessors
-            auto predecessors = getPreds(BB);
-            if (!predecessors.empty()) {
-                bool first = true;
-                for (auto* Pred : predecessors) {
-                    if (first) {
-                        newDominators = dominators_[Pred];
-                        first = false;
-                    } else {
-                        BBSet intersection;
-                        std::set_intersection(
-                            newDominators.begin(), newDominators.end(),
-                            dominators_[Pred].begin(), dominators_[Pred].end(),
-                            std::inserter(intersection, intersection.begin()));
-                        newDominators = std::move(intersection);
-                    }
-                }
-                newDominators.insert(BB);  // Block always dominates itself
-            } else {
-                // If no predecessors and not entry, this block is unreachable
-                // In a well-formed CFG, only entry should have no predecessors
-                newDominators.insert(BB);
-            }
-
-            if (newDominators != dominators_[BB]) {
-                dominators_[BB] = std::move(newDominators);
-                changed = true;
-            }
+    for (auto* w : getSuccs(v)) {
+        if (data.dfn.find(w) == data.dfn.end()) {
+            data.parent[w] = v;
+            dfsNumbering(w, data);
         }
     }
 }
 
-// https://en.wikipedia.org/wiki/Dominator_(graph_theory)
+// Link operation for DSU in Lengauer-Tarjan
 template <bool IsPostDom>
-void DominanceInfoBase<IsPostDom>::computeImmediateDominators() {
+void DominanceInfoBase<IsPostDom>::link(BasicBlock* v, BasicBlock* w,
+                                        LengauerTarjanData& data) {
+    data.ancestor[w] = v;
+}
+
+// Compress path in DSU and update minimum sdom label
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::compress(BasicBlock* v,
+                                            LengauerTarjanData& data) {
+    if (data.ancestor[data.ancestor[v]] != nullptr) {
+        compress(data.ancestor[v], data);
+        if (data.dfn[data.sdom[data.label[data.ancestor[v]]]] <
+            data.dfn[data.sdom[data.label[v]]]) {
+            data.label[v] = data.label[data.ancestor[v]];
+        }
+        data.ancestor[v] = data.ancestor[data.ancestor[v]];
+    }
+}
+
+// Eval operation for finding minimum sdom on path
+template <bool IsPostDom>
+BasicBlock* DominanceInfoBase<IsPostDom>::eval(BasicBlock* v,
+                                               LengauerTarjanData& data) {
+    if (data.ancestor[v] == nullptr) {
+        return v;
+    }
+    compress(v, data);
+    return data.label[v];
+}
+
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeLengauerTarjan() {
     if (function_->empty()) return;
 
+    LengauerTarjanData data;
     auto* entry = getEntry();
-    immediateDominators_[entry] = nullptr;  // Entry has no immediate dominator
 
-    for (auto& BB : *function_) {
-        if (BB == entry) continue;
+    // Step 1: DFS numbering
+    dfsNumbering(entry, data);
 
-        BasicBlock* idom = nullptr;
-        const auto& dominatorsOfBB = dominators_[BB];
+    // Step 2: Compute semi-dominators in reverse DFS order
+    for (int i = data.dfsNum; i >= 2; --i) {
+        BasicBlock* w = data.vertex[i];
 
-        for (auto* dominator : dominatorsOfBB) {
-            if (dominator == BB) continue;
+        // Consider all predecessors of w
+        for (auto* v : getPreds(w)) {
+            if (data.dfn.find(v) == data.dfn.end())
+                continue;  // Skip unreachable blocks
 
-            // Check if this dominator is dominated by all other dominators
-            bool isImmediate = true;
-            for (auto* otherDom : dominatorsOfBB) {
-                if (otherDom == BB || otherDom == dominator) continue;
-
-                if (dominators_[dominator].find(otherDom) ==
-                    dominators_[dominator].end()) {
-                    isImmediate = false;
-                    break;
-                }
-            }
-
-            if (isImmediate) {
-                idom = dominator;
-                break;
+            BasicBlock* u = eval(v, data);
+            if (data.dfn[data.sdom[u]] < data.dfn[data.sdom[w]]) {
+                data.sdom[w] = data.sdom[u];
             }
         }
 
-        immediateDominators_[BB] = idom;
+        // Add w to bucket of its semidominator
+        data.bucket[data.sdom[w]].push_back(w);
+        link(data.parent[w], w, data);
+
+        // Process vertices in parent's bucket
+        for (auto* v : data.bucket[data.parent[w]]) {
+            BasicBlock* u = eval(v, data);
+            if (data.sdom[u] == data.sdom[v]) {
+                data.idom[v] = data.parent[w];
+            } else {
+                data.idom[v] = u;
+            }
+        }
+        data.bucket[data.parent[w]].clear();
+    }
+
+    // Step 3: Finalize immediate dominators
+    for (int i = 2; i <= data.dfsNum; ++i) {
+        BasicBlock* w = data.vertex[i];
+        if (data.idom[w] != data.sdom[w]) {
+            data.idom[w] = data.idom[data.idom[w]];
+        }
+    }
+
+    // Step 4: Fill in the immediate dominators map
+    immediateDominators_.clear();
+    immediateDominators_[entry] = nullptr;
+    for (int i = 2; i <= data.dfsNum; ++i) {
+        BasicBlock* w = data.vertex[i];
+        immediateDominators_[w] = data.idom[w];
+    }
+
+    // Step 5: Compute full dominator sets from immediate dominators
+    computeDominators();
+}
+
+// Compute full dominator sets from immediate dominators
+template <bool IsPostDom>
+void DominanceInfoBase<IsPostDom>::computeDominators() {
+    if (function_->empty()) return;
+
+    dominators_.clear();
+
+    // Entry dominates itself
+    auto* entry = getEntry();
+    dominators_[entry].insert(entry);
+
+    // For each block, compute its dominators by walking up the idom chain
+    for (auto& BB : *function_) {
+        if (BB == entry) continue;
+
+        BBSet doms;
+        BasicBlock* current = BB;
+        while (current != nullptr) {
+            doms.insert(current);
+            current = immediateDominators_[current];
+        }
+        dominators_[BB] = std::move(doms);
     }
 }
 
