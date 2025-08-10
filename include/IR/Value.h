@@ -87,6 +87,9 @@ class Value {
 
     void replaceAllUsesWith(Value* newValue);
 
+    template <typename T>
+    void replaceUsesWith(Value* newValue);
+
     template <typename Lambda>
     void replaceAllUsesBy(Lambda&& lambda);
 
@@ -219,6 +222,18 @@ void Value::replaceAllUsesBy(Lambda&& lambda) {
     while (current) {
         Use* next = current->next_;
         lambda(current);
+        current = next;
+    }
+}
+
+template <typename T>
+void Value::replaceUsesWith(Value* newValue) {
+    Use* current = useListHead_;
+    while (current) {
+        Use* next = current->next_;
+        if (auto user = dyn_cast<T>(current->getUser())) {
+            current->set(newValue);
+        }
         current = next;
     }
 }
