@@ -1,5 +1,7 @@
 #include "IR/Function.h"
 
+#include <iostream>
+
 #include "IR/Module.h"
 #include "IR/Type.h"
 

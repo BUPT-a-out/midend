@@ -14,7 +14,8 @@ class Constant : public User {
 
    public:
     static bool classof(const Value* v) {
-        return v->getValueKind() == ValueKind::Constant ||
+        return (v->getValueKind() >= ValueKind::ConstantBegin &&
+                v->getValueKind() <= ValueKind::ConstantEnd) ||
                v->getValueKind() == ValueKind::Function ||
                v->getValueKind() == ValueKind::GlobalVariable;
     }
@@ -25,7 +26,7 @@ class ConstantInt : public Constant {
     uint32_t value_;
 
     ConstantInt(IntegerType* ty, uint32_t val)
-        : Constant(ty, ValueKind::Constant), value_(val) {}
+        : Constant(ty, ValueKind::ConstantInt), value_(val) {}
 
    public:
     static ConstantInt* get(IntegerType* ty, uint32_t val);
@@ -46,7 +47,7 @@ class ConstantInt : public Constant {
     std::string toString() const override { return std::to_string(value_); }
 
     static bool classof(const Value* v) {
-        return v->getValueKind() == ValueKind::Constant;
+        return v->getValueKind() == ValueKind::ConstantInt;
     }
 };
 
@@ -55,7 +56,7 @@ class ConstantFP : public Constant {
     float value_;
 
     ConstantFP(FloatType* ty, float val)
-        : Constant(ty, ValueKind::Constant), value_(val) {}
+        : Constant(ty, ValueKind::ConstantFP), value_(val) {}
 
    public:
     static ConstantFP* get(FloatType* ty, float val);
@@ -69,13 +70,14 @@ class ConstantFP : public Constant {
     std::string toString() const override { return std::to_string(value_); }
 
     static bool classof(const Value* v) {
-        return v->getValueKind() == ValueKind::Constant;
+        return v->getValueKind() == ValueKind::ConstantFP;
     }
 };
 
 class ConstantPointerNull : public Constant {
    private:
-    ConstantPointerNull(PointerType* ty) : Constant(ty, ValueKind::Constant) {}
+    ConstantPointerNull(PointerType* ty)
+        : Constant(ty, ValueKind::ConstantPointerNull) {}
 
    public:
     static ConstantPointerNull* get(PointerType* ty);
@@ -85,7 +87,7 @@ class ConstantPointerNull : public Constant {
     std::string toString() const override { return "null"; }
 
     static bool classof(const Value* v) {
-        return v->getValueKind() == ValueKind::Constant;
+        return v->getValueKind() == ValueKind::ConstantPointerNull;
     }
 };
 
@@ -94,7 +96,7 @@ class ConstantArray : public Constant {
     std::vector<Constant*> elements_;
 
     ConstantArray(ArrayType* ty, std::vector<Constant*> elems)
-        : Constant(ty, ValueKind::Constant), elements_(std::move(elems)) {}
+        : Constant(ty, ValueKind::ConstantArray), elements_(std::move(elems)) {}
 
    public:
     static ConstantArray* get(ArrayType* ty, std::vector<Constant*> elements);
@@ -108,6 +110,12 @@ class ConstantArray : public Constant {
         return idx < elements_.size() ? elements_[idx] : nullptr;
     }
 
+    void setElement(unsigned idx, Constant* value) {
+        if (idx < elements_.size()) {
+            elements_[idx] = value;
+        }
+    }
+
     std::string toString() const override {
         std::string result = "[";
         for (size_t i = 0; i < elements_.size(); ++i) {
@@ -119,7 +127,57 @@ class ConstantArray : public Constant {
     }
 
     static bool classof(const Value* v) {
-        return v->getValueKind() == ValueKind::Constant;
+        return v->getValueKind() == ValueKind::ConstantArray;
+    }
+};
+
+class ConstantGEP : public Constant {
+   private:
+    ConstantArray* array_;
+    size_t index_;
+
+    ConstantGEP(PointerType* ty, ConstantArray* arr, size_t idx)
+        : Constant(ty, ValueKind::ConstantGEP), array_(arr), index_(idx) {}
+
+   public:
+    // 1) ConstantArray*, size_t
+    static ConstantGEP* get(ConstantArray* arr, size_t index);
+    // 2) ConstantGEP*, size_t
+    static ConstantGEP* get(ConstantGEP* base, size_t index);
+    // 3) ConstantArray*, ConstantInt*
+    static ConstantGEP* get(ConstantArray* arr, ConstantInt* indexConst);
+    // 4) ConstantGEP*, ConstantInt*
+    static ConstantGEP* get(ConstantGEP* base, ConstantInt* indexConst);
+    // 5) ConstantArray*, std::vector<size_t>
+    static ConstantGEP* get(ConstantArray* arr,
+                            const std::vector<size_t>& indices);
+    // 6) ConstantArray*, std::vector<ConstantInt*>
+    static ConstantGEP* get(ConstantArray* arr,
+                            const std::vector<ConstantInt*>& indices);
+    // 7) ConstantGEP*, std::vector<size_t>
+    static ConstantGEP* get(ConstantGEP* base,
+                            const std::vector<size_t>& indices);
+    // 8) ConstantGEP*, std::vector<ConstantInt*>
+    static ConstantGEP* get(ConstantGEP* base,
+                            const std::vector<ConstantInt*>& indices);
+
+    ConstantArray* getArray() const { return array_; }
+    size_t getIndex() const { return index_; }
+
+    Constant* getElement() const {
+        return array_ ? array_->getElement(index_) : nullptr;
+    }
+
+    std::string toString() const override {
+        return std::string("gep(") +
+               (array_ ? array_->toString() : std::string("null")) + ", " +
+               std::to_string(index_) + ")";
+    }
+
+    void setElementValue(Value* newValue);
+
+    static bool classof(const Value* v) {
+        return v->getValueKind() == ValueKind::ConstantGEP;
     }
 };
 
@@ -129,7 +187,7 @@ class ConstantExpr : public Constant {
     std::vector<Constant*> operands_;
 
     ConstantExpr(Type* ty, Opcode op, std::vector<Constant*> operands)
-        : Constant(ty, ValueKind::Constant),
+        : Constant(ty, ValueKind::ConstantExpr),
           opcode_(op),
           operands_(std::move(operands)) {}
 
@@ -149,13 +207,13 @@ class ConstantExpr : public Constant {
     std::string toString() const override { return "const_expr"; }
 
     static bool classof(const Value* v) {
-        return v->getValueKind() == ValueKind::Constant;
+        return v->getValueKind() == ValueKind::ConstantExpr;
     }
 };
 
 class UndefValue : public Constant {
    private:
-    UndefValue(Type* ty) : Constant(ty, ValueKind::Constant) {}
+    UndefValue(Type* ty) : Constant(ty, ValueKind::UndefValue) {}
 
    public:
     static UndefValue* get(Type* ty);
@@ -163,7 +221,7 @@ class UndefValue : public Constant {
     std::string toString() const override { return "undef"; }
 
     static bool classof(const Value* v) {
-        return v->getValueKind() == ValueKind::Constant;
+        return v->getValueKind() == ValueKind::UndefValue;
     }
 };
 

@@ -1,6 +1,9 @@
 #include "IR/BasicBlock.h"
 
+#include <iostream>
 #include <set>
+#include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "IR/Function.h"
@@ -181,6 +184,47 @@ void BasicBlock::invalidatePredecessorCacheInFunction() const {
     for (auto* bb : *parent_) {
         bb->invalidatePredecessorCache();
     }
+}
+
+BasicBlock* BasicBlock::split(iterator pos,
+                              const std::vector<BasicBlock*>& between) {
+    Function* fn = getParent();
+    if (pos == end() || !fn) return nullptr;
+
+    Context* ctx = getContext();
+
+    BasicBlock* newBB = BasicBlock::Create(ctx, getName() + ".split");
+
+    std::vector<Instruction*> originalSlice;
+    for (auto it = pos; it != end(); ++it) {
+        originalSlice.push_back(*it);
+#ifdef A_OUT_DEBUG
+        if (auto* phi = dyn_cast<PHINode>(*it)) {
+            throw std::runtime_error("PHI node in basic block split");
+        }
+#endif
+    }
+
+    for (Instruction* inst : originalSlice) {
+        newBB->push_back(inst->clone());
+        erase(inst->getIterator());
+    }
+    replaceUsesWith<PHINode>(newBB);
+    if (fn) {
+        auto cur = this;
+        for (auto* bb : between) {
+            if (!bb) continue;
+            bb->insertAfter(cur);
+            cur = bb;
+        }
+        newBB->insertAfter(cur);
+    }
+
+    for (auto bb : parent_->getBasicBlocks()) {
+        std::cout << "[DEBUG] BasicBlock: " << bb->getName() << std::endl;
+    }
+
+    return newBB;
 }
 
 }  // namespace midend

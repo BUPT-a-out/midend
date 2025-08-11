@@ -8,7 +8,17 @@ enum class ValueKind {
     Value,
     Use,
     User,
-    Constant,
+
+    ConstantBegin,
+    ConstantInt,
+    ConstantFP,
+    ConstantPointerNull,
+    ConstantArray,
+    ConstantGEP,
+    ConstantExpr,
+    UndefValue,
+    ConstantEnd,
+
     GlobalVariable,
     Function,
     BasicBlock,

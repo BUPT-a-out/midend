@@ -1,6 +1,7 @@
 #pragma once
 
 #include <list>
+#include <vector>
 
 #include "IR/Instruction.h"
 #include "IR/Value.h"
@@ -84,6 +85,8 @@ class BasicBlock : public Value {
 
     std::vector<BasicBlock*> getPredecessors() const;
     std::vector<BasicBlock*> getSuccessors() const;
+
+    BasicBlock* split(iterator pos, const std::vector<BasicBlock*>& between);
 
     // Cache invalidation methods
     void invalidatePredecessorCache() const;

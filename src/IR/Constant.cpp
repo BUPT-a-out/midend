@@ -63,6 +63,111 @@ ConstantArray* ConstantArray::get(ArrayType* ty,
     return new ConstantArray(ty, std::move(elements));
 }
 
+ConstantGEP* ConstantGEP::get(ConstantArray* arr, size_t index) {
+    if (!arr) return nullptr;
+    auto* elemPtrTy = PointerType::get(arr->getType()->getElementType());
+    return new ConstantGEP(elemPtrTy, arr, index);
+}
+
+ConstantGEP* ConstantGEP::get(ConstantGEP* base, size_t index) {
+    if (!base) return nullptr;
+    // Multi-dimensional: use base->getElement() which should return Constant*
+    auto* nextArray = dyn_cast<ConstantArray>(base->getElement());
+    if (!nextArray) return nullptr;
+    auto* elemPtrTy = PointerType::get(nextArray->getType()->getElementType());
+    return new ConstantGEP(elemPtrTy, nextArray, index);
+}
+
+ConstantGEP* ConstantGEP::get(ConstantArray* arr, ConstantInt* indexConst) {
+    if (!arr || !indexConst) return nullptr;
+    int32_t signedIdx = indexConst->getSignedValue();
+    if (signedIdx < 0) return nullptr;
+    return get(arr, static_cast<size_t>(signedIdx));
+}
+
+ConstantGEP* ConstantGEP::get(ConstantGEP* base, ConstantInt* indexConst) {
+    if (!base || !indexConst) return nullptr;
+    int32_t signedIdx = indexConst->getSignedValue();
+    if (signedIdx < 0) return nullptr;
+    return get(base, static_cast<size_t>(signedIdx));
+}
+
+ConstantGEP* ConstantGEP::get(ConstantArray* arr,
+                              const std::vector<size_t>& indices) {
+    if (!arr) return nullptr;
+    ConstantGEP* current = nullptr;
+    for (size_t i = 0; i < indices.size(); ++i) {
+        current = (i == 0) ? get(arr, indices[i]) : get(current, indices[i]);
+        if (!current) return nullptr;
+    }
+    return current;
+}
+
+ConstantGEP* ConstantGEP::get(ConstantArray* arr,
+                              const std::vector<ConstantInt*>& indices) {
+    if (!arr) return nullptr;
+    ConstantGEP* current = nullptr;
+    for (size_t i = 0; i < indices.size(); ++i) {
+        if (!indices[i]) return nullptr;
+        int32_t idx = indices[i]->getSignedValue();
+        if (idx < 0) return nullptr;
+        current = (i == 0) ? get(arr, static_cast<size_t>(idx))
+                           : get(current, static_cast<size_t>(idx));
+        if (!current) return nullptr;
+    }
+    return current;
+}
+
+ConstantGEP* ConstantGEP::get(ConstantGEP* base,
+                              const std::vector<size_t>& indices) {
+    if (!base) return nullptr;
+    ConstantGEP* current = base;
+    for (size_t idx : indices) {
+        current = get(current, idx);
+        if (!current) return nullptr;
+    }
+    return current;
+}
+
+ConstantGEP* ConstantGEP::get(ConstantGEP* base,
+                              const std::vector<ConstantInt*>& indices) {
+    if (!base) return nullptr;
+    ConstantGEP* current = base;
+    for (auto* ci : indices) {
+        if (!ci) return nullptr;
+        int32_t idx = ci->getSignedValue();
+        if (idx < 0) return nullptr;
+        current = get(current, static_cast<size_t>(idx));
+        if (!current) return nullptr;
+    }
+    return current;
+}
+
+void ConstantGEP::setElementValue(Value* newValue) {
+    auto* newConst = dyn_cast<Constant>(newValue);
+#ifdef A_OUT_DEBUG
+    if (!array_) throw std::runtime_error("ConstantGEP: null array");
+    Constant* cur = array_->getElement(index_);
+    if (!cur) throw std::runtime_error("ConstantGEP: index out of range");
+
+    if (!isa<ConstantInt>(cur) && !isa<ConstantFP>(cur)) {
+        throw std::runtime_error(
+            "ConstantGEP: only ConstantInt or ConstantFP element can be "
+            "updated");
+    }
+
+    if (!newValue || newValue->getType() != cur->getType()) {
+        throw std::runtime_error(
+            "ConstantGEP: type mismatch when updating element value");
+    }
+
+    if (!newConst) {
+        throw std::runtime_error("ConstantGEP: new value must be a Constant");
+    }
+#endif
+    array_->setElement(index_, newConst);
+}
+
 ConstantExpr* ConstantExpr::getAdd(Constant* lhs, Constant* rhs) {
     if (lhs->getType() != rhs->getType()) {
         throw std::runtime_error(
