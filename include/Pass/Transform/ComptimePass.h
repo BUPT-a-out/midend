@@ -40,34 +40,49 @@ class ComptimePass : public ModulePass {
 
    private:
     using ValueMap = std::unordered_map<Value*, Value*>;
-    using ChangedSet = std::unordered_set<Value*>;
+    using RuntimeSet = std::unordered_set<Value*>;
+    using ComptimeSet = std::unordered_set<Instruction*>;
+    using VisitedSet = std::unordered_set<BasicBlock*>;
 
     ValueMap globalValueMap;
-    ChangedSet changedValues;
+    RuntimeSet runtimeValues;   // Values that become runtime-dependent
+    ComptimeSet comptimeInsts;  // Instructions confirmed as compile-time
     AnalysisManager* analysisManager = nullptr;
 
     void initializeGlobalValueMap(Module& module);
+
+    // Unified evaluation function - pass ComptimeSet as nullptr for propagation
     Value* evaluateFunction(Function* func, const std::vector<Value*>& args,
-                            bool isMainFunction = false);
+                            bool isMainFunction,
+                            const ComptimeSet* comptimeSet = nullptr);
 
     void evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
-                       ValueMap& valueMap, bool isMainFunction);
+                       ValueMap& valueMap, bool isMainFunction,
+                       const ComptimeSet* comptimeSet = nullptr);
+
+    void performRuntimePropagation(BasicBlock* startBlock, BasicBlock* endBlock,
+                                   ValueMap& valueMap);
 
     Value* evaluateAllocaInst(AllocaInst* alloca, ValueMap& valueMap);
     Value* evaluateBinaryOp(BinaryOperator* binOp, ValueMap& valueMap);
     Value* evaluateUnaryOp(UnaryOperator* unOp, ValueMap& valueMap);
     Value* evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap);
     Value* evaluateLoadInst(LoadInst* load, ValueMap& valueMap);
-    void evaluateStoreInst(StoreInst* store, ValueMap& valueMap);
+    Value* evaluateStoreInst(StoreInst* store, ValueMap& valueMap);
     Value* evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap);
     Value* evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                            bool isMainFunction);
+                            bool isPropagation);
     Value* evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
+
+    void markAsRuntime(Value* value, ValueMap& valueMap);
+    void invalidateArraysFromCall(CallInst* call, ValueMap& valueMap);
+
+    void updateValueMap(Value* inst, Value* result, ValueMap& valueMap);
 
     void handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
                         ValueMap& valueMap);
-    void evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
-                         ValueMap& valueMap);
+    Value* evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
+                           ValueMap& valueMap);
 
     size_t eliminateComputedInstructions(Function* func);
     void initializeArrays(Module& module);
@@ -75,7 +90,6 @@ class ComptimePass : public ModulePass {
                               ConstantArray* arrayValue);
 
     Constant* createZeroInitializedConstant(Type* type);
-    Value* getFromNestedArray(Value* array, const std::vector<Value*>& indices);
 
     int countNonZeroElements(Constant* constant);
     int getTotalElements(Constant* constant);

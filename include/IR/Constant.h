@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "IR/IRPrinter.h"
 #include "IR/Instruction.h"
 #include "IR/Type.h"
 #include "IR/Value.h"
@@ -118,10 +119,35 @@ class ConstantArray : public Constant {
 
     std::string toString() const override {
         std::string result = "[";
-        for (size_t i = 0; i < elements_.size(); ++i) {
-            if (i > 0) result += ", ";
-            result += elements_[i]->toString();
+        unsigned lastNonZero = 0;
+
+        // Find the last non-zero element
+        for (unsigned i = getNumElements(); i > 0; --i) {
+            if (auto* elem = dyn_cast<ConstantInt>(getElement(i - 1))) {
+                if (elem->getSignedValue() != 0) {
+                    lastNonZero = i;
+                    break;
+                }
+            } else {
+                // Non-integer elements are always considered significant
+                lastNonZero = i;
+                break;
+            }
         }
+
+        // Print elements up to the last non-zero
+        for (unsigned i = 0; i < lastNonZero; ++i) {
+            if (i > 0) result += ", ";
+            result += IRPrinter::printType(getElement(i)->getType()) + " ";
+            result += IRPrinter().getValueName(getElement(i));
+        }
+
+        // If there are trailing zeros, indicate with ...
+        if (lastNonZero < getNumElements()) {
+            if (lastNonZero > 0) result += ", ";
+            result += "...";
+        }
+
         result += "]";
         return result;
     }

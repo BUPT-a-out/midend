@@ -221,7 +221,7 @@ TEST_F(ConstantTest, ConstantStringRepresentations) {
                                        ConstantInt::get(int32Ty, 2),
                                        ConstantInt::get(int32Ty, 3)};
     auto* constArray = ConstantArray::get(arrayTy, elements);
-    EXPECT_EQ(constArray->toString(), "[1, 2, 3]");
+    EXPECT_EQ(constArray->toString(), "[i32 1, i32 2, i32 3]");
 
     // Test empty array
     auto* emptyArrayTy = ArrayType::get(int32Ty, 0);

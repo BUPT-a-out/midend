@@ -20,14 +20,15 @@ class IRPrinter {
     std::stringstream output_;
 
     unsigned getValueNumber(const Value* v);
-    std::string getValueName(const Value* v);
-    std::string printType(Type* ty);
     void printInstruction(const Instruction* inst);
     void printBasicBlock(const BasicBlock* bb);
     void printFunction(const Function* func);
 
    public:
     IRPrinter() = default;
+
+    std::string getValueName(const Value* v);
+    static std::string printType(Type* ty);
 
     // Print individual components
     std::string print(const Module* module);

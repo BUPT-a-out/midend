@@ -40,55 +40,19 @@ std::string IRPrinter::getValueName(const Value* v) {
     // Constants have special representations
     if (auto* constant = dyn_cast<Constant>(v)) {
         // Check by type first, since classof methods are broken
-        if (isa<PointerType>(*constant->getType())) {
-            // This is likely a ConstantPointerNull
-            return "null";
-        }
-        if (isa<IntegerType>(*constant->getType())) {
-            auto* ci = static_cast<const ConstantInt*>(constant);
+        if (isa<ConstantPointerNull>(constant)) return "null";
+        if (auto* ci = dyn_cast<ConstantInt>(constant))
             return std::to_string(ci->getSignedValue());
-        }
-        if (isa<FloatType>(*constant->getType())) {
-            auto* cf = static_cast<const ConstantFP*>(constant);
+        if (auto* cf = dyn_cast<ConstantFP>(constant)) {
             std::stringstream ss;
             ss << std::scientific << std::setprecision(6) << cf->getValue();
             return ss.str();
         }
-        if (isa<ArrayType>(*constant->getType())) {
-            auto* carr = static_cast<const ConstantArray*>(constant);
-            std::string result = "[";
-            unsigned lastNonZero = 0;
-
-            // Find the last non-zero element
-            for (unsigned i = carr->getNumElements(); i > 0; --i) {
-                if (auto* elem =
-                        dyn_cast<ConstantInt>(carr->getElement(i - 1))) {
-                    if (elem->getSignedValue() != 0) {
-                        lastNonZero = i;
-                        break;
-                    }
-                } else {
-                    // Non-integer elements are always considered significant
-                    lastNonZero = i;
-                    break;
-                }
-            }
-
-            // Print elements up to the last non-zero
-            for (unsigned i = 0; i < lastNonZero; ++i) {
-                if (i > 0) result += ", ";
-                result += printType(carr->getElement(i)->getType()) + " ";
-                result += getValueName(carr->getElement(i));
-            }
-
-            // If there are trailing zeros, indicate with ...
-            if (lastNonZero < carr->getNumElements()) {
-                if (lastNonZero > 0) result += ", ";
-                result += "...";
-            }
-
-            result += "]";
-            return result;
+        if (auto* carr = dyn_cast<ConstantArray>(constant)) {
+            return carr->toString();
+        }
+        if (auto* gep = dyn_cast<ConstantGEP>(constant)) {
+            return gep->toString();
         }
     }
     if (isa<UndefValue>(*v)) {

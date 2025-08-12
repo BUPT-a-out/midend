@@ -29,36 +29,35 @@ void ComptimePass::getAnalysisUsage(
 bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
     analysisManager = &am;
     globalValueMap.clear();
-    changedValues.clear();
+    runtimeValues.clear();
+    comptimeInsts.clear();
     bool changed = false;
 
-    // Step 1: Collect global variables into global value map
     initializeGlobalValueMap(module);
 
-    // Step 2: Evaluate main function if it exists
     Function* mainFunc = module.getFunction("main");
     if (mainFunc) {
-        size_t initialValueMapSize = globalValueMap.size();
-        evaluateFunction(mainFunc, {}, true);
+        // Pass 1: Propagation - identify compile-time and runtime instructions
+        evaluateFunction(mainFunc, {}, true, nullptr);
 
-        // Debug: Print value map size
-        std::cerr << "[ComptimePass] Initial map size: " << initialValueMapSize
-                  << ", Final map size: " << globalValueMap.size() << std::endl;
+        // Determine compile-time instruction set (value map - runtime set)
+        for (auto& [val, result] : globalValueMap) {
+            if (auto* inst = dyn_cast<Instruction>(val)) {
+                if (!runtimeValues.count(inst)) {
+                    comptimeInsts.insert(inst);
+                    std::cerr << "[DEBUG] Added to compile-time: "
+                              << IRPrinter::toString(inst) << std::endl;
+                }
+            }
+        }
 
-        // Check if we computed any new instruction values
-        changed = (globalValueMap.size() > initialValueMapSize);
+        // Pass 2: Computation - compute actual values with fresh value map
+        globalValueMap.clear();
+        initializeGlobalValueMap(module);
+        evaluateFunction(mainFunc, {}, true, &comptimeInsts);
 
         // Step 3: Eliminate computed instructions
-        size_t instructionsEliminated = eliminateComputedInstructions(mainFunc);
-
-        // Debug: Print eliminated count
-        std::cerr << "[ComptimePass] Instructions eliminated: "
-                  << instructionsEliminated << std::endl;
-
-        // If we eliminated any instructions, we made changes
-        if (instructionsEliminated > 0) {
-            changed = true;
-        }
+        changed |= eliminateComputedInstructions(mainFunc) > 0;
 
         // Step 4: Initialize arrays with computed values
         initializeArrays(module);
@@ -72,7 +71,6 @@ void ComptimePass::initializeGlobalValueMap(Module& module) {
         if (gv->hasInitializer()) {
             globalValueMap[gv] = gv->getInitializer();
         } else {
-            // Initialize global variables with zero values
             Type* valueType = gv->getValueType();
             globalValueMap[gv] = createZeroInitializedConstant(valueType);
         }
@@ -81,13 +79,16 @@ void ComptimePass::initializeGlobalValueMap(Module& module) {
 
 Value* ComptimePass::evaluateFunction(Function* func,
                                       const std::vector<Value*>& args,
-                                      bool isMainFunction) {
+                                      bool isMainFunction,
+                                      const ComptimeSet* comptimeSet) {
     if (func->isDeclaration()) {
         return nullptr;
     }
 
+    // Use appropriate value map based on mode and function
     ValueMap localValueMap;
-    ValueMap& valueMap = isMainFunction ? globalValueMap : localValueMap;
+    ValueMap& valueMap =
+        (isMainFunction || !comptimeSet) ? globalValueMap : localValueMap;
 
     // Bind function arguments
     for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
@@ -101,7 +102,8 @@ Value* ComptimePass::evaluateFunction(Function* func,
     // Simulate execution through the function
     while (currentBlock) {
         // Evaluate all instructions in the current block
-        evaluateBlock(currentBlock, prevBlock, valueMap, isMainFunction);
+        evaluateBlock(currentBlock, prevBlock, valueMap, isMainFunction,
+                      comptimeSet);
 
         auto* terminator = currentBlock->getTerminator();
         if (!terminator) break;
@@ -123,12 +125,15 @@ Value* ComptimePass::evaluateFunction(Function* func,
                     currentBlock = constCond->getValue() ? br->getTrueBB()
                                                          : br->getFalseBB();
                 } else {
-                    // Runtime condition - jump to post-immediate dominator
-                    currentBlock = getPostImmediateDominator(currentBlock);
+                    // Runtime condition - perform runtime propagation
+                    BasicBlock* postDom =
+                        getPostImmediateDominator(currentBlock);
+                    performRuntimePropagation(currentBlock, postDom, valueMap);
+                    currentBlock = postDom;
                     prevBlock = nullptr;  // Mark as non-compile-time state
                 }
             } else {
-                currentBlock = br->getSuccessor(0);
+                currentBlock = br->getTargetBB();
             }
         } else {
             break;
@@ -139,82 +144,79 @@ Value* ComptimePass::evaluateFunction(Function* func,
 }
 
 void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
-                                 ValueMap& valueMap, bool isMainFunction) {
+                                 ValueMap& valueMap, bool isMainFunction,
+                                 const ComptimeSet* comptimeSet) {
     // First handle PHI nodes
     handlePHINodes(block, prevBlock, valueMap);
 
+    bool isPropagation = (comptimeSet == nullptr);
+
     // Then handle other instructions
     for (auto* inst : *block) {
-        if (isa<PHINode>(inst)) continue;  // Already handled
-
-        // Skip terminator instructions
+        if (isa<PHINode>(inst)) continue;
         if (inst->isTerminator()) continue;
 
-        std::cerr << "[DEBUG] Evaluating instruction: "
-                  << IRPrinter::toString(inst) << std::endl;
+        // In computation mode, check if instruction should be processed
+        if (!isPropagation && !comptimeSet->count(inst)) {
+            std::cerr << "[DEBUG Compute] Skipping non-comptime instruction: "
+                      << IRPrinter::toString(inst) << std::endl;
+            continue;
+        }
+
+        std::cerr << (isPropagation ? "[DEBUG Propagate] " : "[DEBUG Compute] ")
+                  << "Evaluating instruction: " << IRPrinter::toString(inst);
 
         Value* result = nullptr;
 
         if (auto* alloca = dyn_cast<AllocaInst>(inst)) {
             result = evaluateAllocaInst(alloca, valueMap);
         } else if (auto* binOp = dyn_cast<BinaryOperator>(inst)) {
-            std::cerr << "[DEBUG] Found BinaryOperator" << std::endl;
             result = evaluateBinaryOp(binOp, valueMap);
-            if (result) {
-                std::cerr << "[DEBUG] BinaryOp evaluated successfully"
-                          << std::endl;
-            } else {
-                std::cerr << "[DEBUG] BinaryOp evaluation failed" << std::endl;
-            }
         } else if (auto* unOp = dyn_cast<UnaryOperator>(inst)) {
             result = evaluateUnaryOp(unOp, valueMap);
         } else if (auto* cmp = dyn_cast<CmpInst>(inst)) {
-            std::cerr << "[DEBUG] Found CmpInst" << std::endl;
             result = evaluateCmpInst(cmp, valueMap);
-            if (result) {
-                std::cerr << "[DEBUG] CmpInst evaluated successfully"
-                          << std::endl;
-            } else {
-                std::cerr << "[DEBUG] CmpInst evaluation failed" << std::endl;
-            }
         } else if (auto* load = dyn_cast<LoadInst>(inst)) {
             result = evaluateLoadInst(load, valueMap);
         } else if (auto* store = dyn_cast<StoreInst>(inst)) {
-            evaluateStoreInst(store, valueMap);
+            result = evaluateStoreInst(store, valueMap);
         } else if (auto* gep = dyn_cast<GetElementPtrInst>(inst)) {
             result = evaluateGEP(gep, valueMap);
         } else if (auto* call = dyn_cast<CallInst>(inst)) {
             result = evaluateCallInst(call, valueMap, isMainFunction);
         } else if (auto* cast = dyn_cast<CastInst>(inst)) {
-            std::cerr << "[DEBUG] Found CastInst" << std::endl;
             result = evaluateCastInst(cast, valueMap);
-            if (result) {
-                std::cerr << "[DEBUG] CastInst evaluated successfully"
-                          << std::endl;
-            } else {
-                std::cerr << "[DEBUG] CastInst evaluation failed" << std::endl;
+        } else {
+            throw std::runtime_error(
+                "Unknown instruction type in block evaluation: " +
+                IRPrinter::toString(inst));
+        }
+        std::cout << "\t= (" << result << ") " << IRPrinter::toString(result)
+                  << std::endl;
+
+        updateValueMap(inst, result, valueMap);
+    }
+}
+
+void ComptimePass::updateValueMap(Value* key, Value* result,
+                                  ValueMap& valueMap) {
+#ifdef A_OUT_DEBUG
+    if (!key) {
+        throw std::runtime_error("Null key in value map update");
+    }
+#endif
+    if (result) {
+        if (valueMap.count(key)) {
+            if (valueMap[key] != result) {
+                std::cerr << "[DEBUG] Value changed for " << key->getName()
+                          << ", marking as runtime" << std::endl;
+                markAsRuntime(key, valueMap);
             }
         }
-
-        // Store the result if it was computed
-        if (result) {
-            if (valueMap.count(inst) && valueMap[inst] != result) {
-                changedValues.insert(inst);
-            }
-            valueMap[inst] = result;
-
-            // Debug output to understand what values we're storing
-            if (isa<ConstantInt>(result)) {
-                std::cerr << "[DEBUG] Stored ConstantInt for "
-                          << inst->getName() << std::endl;
-            } else if (isa<ConstantFP>(result)) {
-                std::cerr << "[DEBUG] Stored ConstantFP for " << inst->getName()
-                          << std::endl;
-            } else {
-                std::cerr << "[DEBUG] Stored non-constant value for "
-                          << inst->getName() << std::endl;
-            }
-        }
+        valueMap[key] = result;
+    } else if (valueMap.find(key) != valueMap.end()) {
+        valueMap.erase(key);
+        markAsRuntime(key, valueMap);
     }
 }
 
@@ -222,35 +224,33 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
                                   ValueMap& valueMap) {
     std::vector<PHINode*> phiNodes;
 
-    // Collect all PHI nodes in this block
     for (auto* inst : *block) {
         if (auto* phi = dyn_cast<PHINode>(inst)) {
             phiNodes.push_back(phi);
         } else {
-            break;  // PHI nodes are always at the beginning
+            break;
         }
     }
 
     if (phiNodes.empty()) return;
 
-    // If we don't know the previous block, we can't evaluate PHI nodes
     if (!prevBlock) {
         for (auto* phi : phiNodes) {
-            valueMap.erase(phi);
+            updateValueMap(phi, nullptr, valueMap);
         }
-        return;
     }
 
-    // Build dependency graph for PHI nodes
     std::unordered_map<PHINode*, std::vector<PHINode*>> dependencies;
     std::unordered_map<PHINode*, int> inDegree;
+    std::unordered_map<PHINode*, Value*> tempValues;
+    std::queue<PHINode*> queue;
 
+    // Build dependency graph for PHI nodes
     for (auto* phi : phiNodes) {
         dependencies[phi] = {};
         inDegree[phi] = 0;
     }
 
-    // Find dependencies between PHI nodes
     for (auto* phi : phiNodes) {
         Value* incomingVal = phi->getIncomingValueForBlock(prevBlock);
         if (incomingVal) {
@@ -266,9 +266,6 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
     }
 
     // Topological sort to handle non-cyclic PHIs first
-    std::queue<PHINode*> queue;
-    std::vector<PHINode*> processed;
-
     for (auto* phi : phiNodes) {
         if (inDegree[phi] == 0) {
             queue.push(phi);
@@ -278,7 +275,8 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
     while (!queue.empty()) {
         PHINode* phi = queue.front();
         queue.pop();
-        processed.push_back(phi);
+        updateValueMap(phi, evaluatePHINode(phi, prevBlock, valueMap),
+                       valueMap);
 
         for (auto* dep : dependencies[phi]) {
             if (--inDegree[dep] == 0) {
@@ -287,15 +285,8 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
         }
     }
 
-    // Handle non-cyclic PHI nodes
-    for (auto* phi : processed) {
-        evaluatePHINode(phi, prevBlock, valueMap);
-    }
-
-    // Handle cyclic PHI nodes (swap values using temporary storage)
-    std::unordered_map<PHINode*, Value*> tempValues;
     for (auto* phi : phiNodes) {
-        if (inDegree[phi] > 0) {  // Part of a cycle
+        if (inDegree[phi] > 0) {
             if (valueMap.count(phi)) {
                 tempValues[phi] = valueMap[phi];
             }
@@ -303,54 +294,39 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
     }
 
     for (auto* phi : phiNodes) {
-        if (inDegree[phi] > 0) {  // Part of a cycle
+        if (inDegree[phi] > 0) {
             Value* incomingVal = phi->getIncomingValueForBlock(prevBlock);
+            Value* result = nullptr;
             if (incomingVal) {
                 if (auto* srcPhi = dyn_cast<PHINode>(incomingVal)) {
                     if (tempValues.count(srcPhi)) {
-                        valueMap[phi] = tempValues[srcPhi];
-                        continue;
+                        result = tempValues[phi];
+                    } else {
+                        throw std::runtime_error(
+                            "PHI node dependency not found: " +
+                            IRPrinter::toString(srcPhi));
                     }
-                }
-
-                Value* val = getValueOrConstant(incomingVal, valueMap);
-                if (val) {
-                    valueMap[phi] = val;
                 } else {
-                    valueMap.erase(phi);
+                    result = getValueOrConstant(incomingVal, valueMap);
                 }
-            } else {
-                valueMap.erase(phi);
             }
+            updateValueMap(phi, result, valueMap);
         }
     }
 }
 
-void ComptimePass::evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
-                                   ValueMap& valueMap) {
+Value* ComptimePass::evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
+                                     ValueMap& valueMap) {
     if (!prevBlock) {
-        valueMap.erase(phi);
-        return;
+        return nullptr;
     }
 
     Value* incomingVal = phi->getIncomingValueForBlock(prevBlock);
     if (!incomingVal) {
-        valueMap.erase(phi);
-        return;
+        return nullptr;
     }
 
-    Value* val = getValueOrConstant(incomingVal, valueMap);
-    if (val) {
-        // Check for special case: incoming value is current PHI itself
-        // (self-loop)
-        if (val == phi && valueMap.count(phi)) {
-            // Keep current value
-            return;
-        }
-        valueMap[phi] = val;
-    } else {
-        valueMap.erase(phi);
-    }
+    return getValueOrConstant(incomingVal, valueMap);
 }
 
 Value* ComptimePass::evaluateAllocaInst(AllocaInst* alloca,
@@ -563,8 +539,6 @@ Value* ComptimePass::evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap) {
     }
 
     if (!wasEvaluated) {
-        std::cerr << "[DEBUG CmpInst] Not evaluated: "
-                  << IRPrinter::toString(cmp) << std::endl;
         return nullptr;
     }
 
@@ -587,11 +561,14 @@ Value* ComptimePass::evaluateLoadInst(LoadInst* load, ValueMap& valueMap) {
     return nullptr;
 }
 
-void ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap) {
+Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap) {
     Value* value = getValueOrConstant(store->getValueOperand(), valueMap);
     Value* ptr = store->getPointerOperand();
 
-    if (!value) return;
+    if (!value) {
+        updateValueMap(ptr, nullptr, valueMap);
+        return nullptr;
+    }
 
     if (valueMap.count(ptr)) {
         if (auto* gepConst = dyn_cast<ConstantGEP>(valueMap[ptr])) {
@@ -599,11 +576,8 @@ void ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap) {
         } else {
             valueMap[ptr] = value;
         }
-        if (valueMap.count(store)) {
-            changedValues.insert(store);
-        }
-        valueMap[store] = value;
     }
+    return store;
 }
 
 Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
@@ -639,36 +613,39 @@ Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
 }
 
 Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                                      bool isMainFunction) {
+                                      bool isPropagation) {
     Function* func = call->getCalledFunction();
 
     if (!func || func->isDeclaration()) {
-        // Declaration function - cannot evaluate at compile time
-        if (isMainFunction) {
-            // Remove global variables and PHI nodes that depend on this call
-            std::vector<Value*> toErase;
-            for (auto& [key, val] : valueMap) {
-                if (isa<GlobalVariable>(key) || isa<PHINode>(key)) {
-                    toErase.push_back(key);
-                }
-            }
-            for (auto* key : toErase) {
-                valueMap.erase(key);
-            }
+        if (isPropagation) {
+            invalidateArraysFromCall(call, valueMap);
         }
         return nullptr;
     }
 
-    // Collect arguments
     std::vector<Value*> args;
+    bool allArgsCompileTime = true;
     for (size_t i = 0; i < call->getNumArgOperands(); ++i) {
         Value* arg = getValueOrConstant(call->getArgOperand(i), valueMap);
-        if (!arg) return nullptr;
+        if (!arg) {
+            allArgsCompileTime = false;
+            break;
+        }
         args.push_back(arg);
     }
 
-    // Recursively evaluate the function
-    return evaluateFunction(func, args, false);
+    if (!allArgsCompileTime) {
+        // Non-compile-time call
+        if (isPropagation) {
+            invalidateArraysFromCall(call, valueMap);
+        }
+        return nullptr;
+    }
+
+    if (isPropagation) {
+        return evaluateFunction(func, args, false, nullptr);
+    }
+    return evaluateFunction(func, args, false, &comptimeInsts);
 }
 
 Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
@@ -677,7 +654,6 @@ Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
 
     Type* destType = castInst->getDestType();
 
-    // Handle different cast operations based on opcode
     switch (castInst->getCastOpcode()) {
         case CastInst::SIToFP:  // Signed integer to float
             if (auto* intVal = dyn_cast<ConstantInt>(operand)) {
@@ -691,44 +667,12 @@ Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
                 return ConstantInt::get(cast<IntegerType>(destType),
                                         (int32_t)fpVal->getValue());
             }
-            break;
-
-        case CastInst::Trunc:  // Truncate integer
+        case CastInst::ZExt:
             if (auto* intVal = dyn_cast<ConstantInt>(operand)) {
-                // Truncate to smaller bit width
                 return ConstantInt::get(cast<IntegerType>(destType),
                                         intVal->getUnsignedValue());
             }
             break;
-
-        case CastInst::ZExt:  // Zero extend
-            if (auto* intVal = dyn_cast<ConstantInt>(operand)) {
-                // Zero extend preserves the unsigned value
-                return ConstantInt::get(cast<IntegerType>(destType),
-                                        intVal->getUnsignedValue());
-            }
-            break;
-
-        case CastInst::SExt:  // Sign extend
-            if (auto* intVal = dyn_cast<ConstantInt>(operand)) {
-                // Sign extend preserves the signed value
-                return ConstantInt::get(cast<IntegerType>(destType),
-                                        intVal->getSignedValue());
-            }
-            break;
-
-        case CastInst::BitCast:  // Type cast
-            // BitCast doesn't change the value, just the type interpretation
-            if (isa<Constant>(operand)) {
-                return operand;
-            }
-            break;
-
-        case CastInst::PtrToInt:  // Pointer to integer
-        case CastInst::IntToPtr:  // Integer to pointer
-            // These are not compile-time computable in general
-            break;
-
         default:
             break;
     }
@@ -739,31 +683,31 @@ Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
 size_t ComptimePass::eliminateComputedInstructions(Function* func) {
     std::vector<Instruction*> toRemove;
 
-    // Collect instructions to remove
-    for (auto* bb : func->getBasicBlocks()) {
-        for (auto* inst : *bb) {
-            if (globalValueMap.count(inst) && !changedValues.count(inst)) {
-                Value* computedValue = globalValueMap[inst];
-
-                if (isa<GetElementPtrInst>(inst) || isa<AllocaInst>(inst) ||
-                    isa<BranchInst>(inst)) {
-                    std::cerr << "[DEBUG] Skipping Inst: " << inst->getName()
-                              << std::endl;
-                    continue;
-                }
-
-                if (isa<ConstantArray>(computedValue) &&
-                    !(isa<ConstantInt>(computedValue) ||
-                      isa<ConstantFP>(computedValue))) {
-                    std::cerr << "[DEBUG] Skipping ConstantArray value: "
-                              << inst->getName() << " = "
-                              << IRPrinter::toString(computedValue)
-                              << std::endl;
-                    continue;
-                }
-
-                toRemove.push_back(inst);
+    // Collect instructions to remove - must be compile-time and not runtime
+    for (auto [value, computedValue] : globalValueMap) {
+        if (auto inst = dyn_cast<Instruction>(value)) {
+            if (isa<GetElementPtrInst>(inst) || isa<AllocaInst>(inst) ||
+                isa<BranchInst>(inst)) {
+                std::cerr << "[DEBUG] Skipping Inst: " << inst->getName()
+                          << std::endl;
+                continue;
             }
+
+            // Skip non-scalar constant values
+            if (isa<ConstantArray>(computedValue) &&
+                !(isa<ConstantInt>(computedValue) ||
+                  isa<ConstantFP>(computedValue))) {
+                std::cerr << "[DEBUG] Skipping ConstantArray value: "
+                          << inst->getName() << " = "
+                          << IRPrinter::toString(computedValue) << std::endl;
+                continue;
+            }
+
+            std::cout << "[DEBUG] Eliminating Inst: " << inst->getName()
+                      << " = " << IRPrinter::toString(computedValue)
+                      << std::endl;
+
+            toRemove.push_back(inst);
         }
     }
 
@@ -807,8 +751,8 @@ void ComptimePass::initializeArrays(Module& module) {
             }
         }
     }
+    std::reverse(localArrays.begin(), localArrays.end());
 
-    // Initialize each local array
     for (auto& [alloca, arrayVal] : localArrays) {
         initializeLocalArray(mainFunc, alloca, arrayVal);
     }
@@ -918,29 +862,6 @@ Constant* ComptimePass::createZeroInitializedConstant(Type* type) {
     return nullptr;
 }
 
-Value* ComptimePass::getFromNestedArray(Value* array,
-                                        const std::vector<Value*>& indices) {
-    if (indices.empty()) return array;
-
-    auto* constArray = dyn_cast<ConstantArray>(array);
-    if (!constArray) return array;
-
-    auto* firstIdx = dyn_cast<ConstantInt>(indices[0]);
-    if (!firstIdx) return nullptr;
-
-    uint32_t idx = firstIdx->getUnsignedValue();
-    if (idx >= constArray->getNumElements()) return nullptr;
-
-    Value* element = constArray->getElement(idx);
-
-    if (indices.size() > 1) {
-        std::vector<Value*> restIndices(indices.begin() + 1, indices.end());
-        return getFromNestedArray(element, restIndices);
-    }
-
-    return element;
-}
-
 int ComptimePass::countNonZeroElements(Constant* constant) {
     if (auto* constArray = dyn_cast<ConstantArray>(constant)) {
         int count = 0;
@@ -992,6 +913,94 @@ Value* ComptimePass::getValueOrConstant(Value* v, ValueMap& valueMap) {
     if (isa<Constant>(v)) return v;
     if (valueMap.count(v)) return valueMap[v];
     return nullptr;
+}
+
+void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
+                                             BasicBlock* endBlock,
+                                             ValueMap& valueMap) {
+    if (!startBlock || !endBlock) return;
+
+    // BFS from all successors of startBlock to endBlock (exclusive)
+    std::queue<BasicBlock*> worklist;
+    VisitedSet visited;
+
+    // Add all successors of startBlock to worklist
+    for (auto* succ : startBlock->getSuccessors()) {
+        if (succ != endBlock) {
+            worklist.push(succ);
+            visited.insert(succ);
+        }
+    }
+
+    while (!worklist.empty()) {
+        BasicBlock* current = worklist.front();
+        worklist.pop();
+
+        // Process instructions in this block
+        for (auto* inst : *current) {
+            if (auto* store = dyn_cast<StoreInst>(inst)) {
+                // Mark store target as runtime
+                Value* ptr = store->getPointerOperand();
+                markAsRuntime(ptr, valueMap);
+            } else if (auto* call = dyn_cast<CallInst>(inst)) {
+                // Treat as runtime call - invalidate arrays
+                invalidateArraysFromCall(call, valueMap);
+            }
+        }
+
+        // Add unvisited successors
+        for (auto* succ : current->getSuccessors()) {
+            if (succ != endBlock && !visited.count(succ)) {
+                worklist.push(succ);
+                visited.insert(succ);
+            }
+        }
+    }
+}
+
+void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap) {
+    if (!value) return;
+
+    runtimeValues.insert(value);
+
+    // If it's a GEP, mark the base array as runtime
+    if (auto* gep = dyn_cast<GetElementPtrInst>(value)) {
+        markAsRuntime(gep->getPointerOperand(), valueMap);
+    }
+    if (auto* constGEP = dyn_cast<ConstantGEP>(value)) {
+        throw std::runtime_error(
+            "ConstantGEP not supported in markAsRuntime yet");
+        // TODO: markAsRuntime(constGEP->getBaseArray(), valueMap);
+    }
+}
+
+void ComptimePass::invalidateArraysFromCall(CallInst* call,
+                                            ValueMap& valueMap) {
+    // Invalidate all global variables
+    std::vector<Value*> toErase;
+    for (auto& [key, val] : valueMap) {
+        if (isa<GlobalVariable>(key)) {
+            toErase.push_back(key);
+        }
+    }
+
+    // Also invalidate arrays passed as arguments
+    for (size_t i = 0; i < call->getNumArgOperands(); ++i) {
+        Value* arg = call->getArgOperand(i);
+
+        // Follow through GEPs to find base arrays
+        while (auto* gep = dyn_cast<GetElementPtrInst>(arg)) {
+            arg = gep->getPointerOperand();
+        }
+
+        if (isa<AllocaInst>(arg) || isa<GlobalVariable>(arg)) {
+            toErase.push_back(arg);
+        }
+    }
+
+    for (auto* key : toErase) {
+        markAsRuntime(key, valueMap);
+    }
 }
 
 BasicBlock* ComptimePass::getPostImmediateDominator(BasicBlock* block) {
