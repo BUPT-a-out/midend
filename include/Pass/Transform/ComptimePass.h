@@ -68,16 +68,17 @@ class ComptimePass : public ModulePass {
     Value* evaluateUnaryOp(UnaryOperator* unOp, ValueMap& valueMap);
     Value* evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap);
     Value* evaluateLoadInst(LoadInst* load, ValueMap& valueMap);
-    Value* evaluateStoreInst(StoreInst* store, ValueMap& valueMap);
+    Value* evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
+                             bool skipSideEffect);
     Value* evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap);
     Value* evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                            bool isPropagation);
+                            bool isPropagation, bool skipSideEffect);
     Value* evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
 
     void markAsRuntime(Value* value, ValueMap& valueMap);
     void invalidateArraysFromCall(CallInst* call, ValueMap& valueMap);
 
-    void updateValueMap(Value* inst, Value* result, ValueMap& valueMap);
+    bool updateValueMap(Value* inst, Value* result, ValueMap& valueMap);
 
     void handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
                         ValueMap& valueMap);
@@ -85,7 +86,7 @@ class ComptimePass : public ModulePass {
                            ValueMap& valueMap);
 
     size_t eliminateComputedInstructions(Function* func);
-    void initializeArrays(Module& module);
+    void initializeValues(Module& module);
     void initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
                               ConstantArray* arrayValue);
 

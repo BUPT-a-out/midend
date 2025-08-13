@@ -122,6 +122,14 @@ class GetElementPtrInst : public Instruction {
     Type* getSourceElementType() const { return sourceElementType_; }
     Value* getPointerOperand() const { return getOperand(0); }
 
+    Value* getBasePointer() const {
+        auto result = getPointerOperand();
+        while (auto* gep = dyn_cast<GetElementPtrInst>(result)) {
+            result = gep->getPointerOperand();
+        }
+        return result;
+    }
+
     unsigned getNumIndices() const { return getNumOperands() - 1; }
 
     Value* getIndex(unsigned i) const {

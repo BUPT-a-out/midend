@@ -106,6 +106,18 @@ Type* Type::getSingleElementType() const {
     return const_cast<Type*>(this);
 }
 
+Type* Type::getBaseElementType() const {
+    if (isArrayType()) {
+        auto* arrayType = static_cast<const ArrayType*>(this);
+        return arrayType->getElementType()->getBaseElementType();
+    }
+    if (isPointerType()) {
+        auto* ptrType = static_cast<const PointerType*>(this);
+        return ptrType->getElementType()->getBaseElementType();
+    }
+    return const_cast<Type*>(this);
+}
+
 Type* Type::getMultiLevelElementType(unsigned levels) const {
     Type* current = const_cast<Type*>(this);
     for (unsigned i = 0; i < levels; ++i) {

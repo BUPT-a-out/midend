@@ -125,6 +125,11 @@ void IRPrinter::printInstruction(const Instruction* inst) {
     // Special handling for different instruction types
     std::string result;
 
+    if (!inst->getType()) {
+        throw std::runtime_error("Instruction " + inst->toString() +
+                                 " has null type");
+    }
+
     // For instructions that produce a value, print the assignment
     if (!inst->getType()->isVoidType()) {
         result = "  " + getValueName(inst) + " = ";
@@ -507,6 +512,9 @@ void IRPrinter::printFunction(const Function* func) {
     output_ << "}\n";
 }
 
+std::string IRPrinter::print(std::unique_ptr<Module>& module) {
+    return print(module.get());
+}
 std::string IRPrinter::print(const Module* module) {
     if (!module) return "";
 

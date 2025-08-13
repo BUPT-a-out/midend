@@ -49,6 +49,9 @@ class Type {
     // Get single-level element type
     Type *getSingleElementType() const;
 
+    // Get base element type (for multi-dimensional arrays/pointers)
+    Type *getBaseElementType() const;
+
     // Get multi-level element type (for GEP with multiple indices)
     Type *getMultiLevelElementType(unsigned levels) const;
 

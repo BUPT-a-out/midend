@@ -46,7 +46,7 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
                 if (!runtimeValues.count(inst)) {
                     comptimeInsts.insert(inst);
                     std::cerr << "[DEBUG] Added to compile-time: "
-                              << IRPrinter::toString(inst) << std::endl;
+                              << IRPrinter::toString(inst);
                 }
             }
         }
@@ -60,7 +60,7 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
         changed |= eliminateComputedInstructions(mainFunc) > 0;
 
         // Step 4: Initialize arrays with computed values
-        initializeArrays(module);
+        initializeValues(module);
     }
 
     return changed;
@@ -87,8 +87,7 @@ Value* ComptimePass::evaluateFunction(Function* func,
 
     // Use appropriate value map based on mode and function
     ValueMap localValueMap;
-    ValueMap& valueMap =
-        (isMainFunction || !comptimeSet) ? globalValueMap : localValueMap;
+    ValueMap& valueMap = isMainFunction ? globalValueMap : localValueMap;
 
     // Bind function arguments
     for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
@@ -113,6 +112,8 @@ Value* ComptimePass::evaluateFunction(Function* func,
             Value* retVal = ret->getReturnValue();
             if (retVal) {
                 returnValue = getValueOrConstant(retVal, valueMap);
+            } else {
+                returnValue = UndefValue::get(func->getReturnType());
             }
             break;
         } else if (auto* br = dyn_cast<BranchInst>(terminator)) {
@@ -139,6 +140,10 @@ Value* ComptimePass::evaluateFunction(Function* func,
             break;
         }
     }
+    std::cout << "[DEBUG] Function " << func->getName()
+              << " evaluated with return value: "
+              << (returnValue ? IRPrinter::toString(returnValue) : "nullptr")
+              << std::endl;
 
     return returnValue;
 }
@@ -156,11 +161,16 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
         if (isa<PHINode>(inst)) continue;
         if (inst->isTerminator()) continue;
 
+        bool skipSideEffect = false;
+
         // In computation mode, check if instruction should be processed
         if (!isPropagation && !comptimeSet->count(inst)) {
-            std::cerr << "[DEBUG Compute] Skipping non-comptime instruction: "
-                      << IRPrinter::toString(inst) << std::endl;
-            continue;
+            if (isa<CallInst>(inst) || isa<StoreInst>(inst)) {
+                std::cerr
+                    << "[DEBUG Compute] Skipping non-comptime instruction: "
+                    << IRPrinter::toString(inst) << std::endl;
+                skipSideEffect = true;
+            }
         }
 
         std::cerr << (isPropagation ? "[DEBUG Propagate] " : "[DEBUG Compute] ")
@@ -179,11 +189,12 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
         } else if (auto* load = dyn_cast<LoadInst>(inst)) {
             result = evaluateLoadInst(load, valueMap);
         } else if (auto* store = dyn_cast<StoreInst>(inst)) {
-            result = evaluateStoreInst(store, valueMap);
+            result = evaluateStoreInst(store, valueMap, skipSideEffect);
         } else if (auto* gep = dyn_cast<GetElementPtrInst>(inst)) {
             result = evaluateGEP(gep, valueMap);
         } else if (auto* call = dyn_cast<CallInst>(inst)) {
-            result = evaluateCallInst(call, valueMap, isMainFunction);
+            result = evaluateCallInst(call, valueMap, isMainFunction,
+                                      skipSideEffect);
         } else if (auto* cast = dyn_cast<CastInst>(inst)) {
             result = evaluateCastInst(cast, valueMap);
         } else {
@@ -198,26 +209,30 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
     }
 }
 
-void ComptimePass::updateValueMap(Value* key, Value* result,
+bool ComptimePass::updateValueMap(Value* key, Value* result,
                                   ValueMap& valueMap) {
 #ifdef A_OUT_DEBUG
     if (!key) {
         throw std::runtime_error("Null key in value map update");
     }
 #endif
+    bool runtime = false;
     if (result) {
         if (valueMap.count(key)) {
             if (valueMap[key] != result) {
                 std::cerr << "[DEBUG] Value changed for " << key->getName()
                           << ", marking as runtime" << std::endl;
                 markAsRuntime(key, valueMap);
+                runtime = true;
             }
         }
         valueMap[key] = result;
     } else if (valueMap.find(key) != valueMap.end()) {
         valueMap.erase(key);
         markAsRuntime(key, valueMap);
+        runtime = true;
     }
+    return runtime;
 }
 
 void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
@@ -561,12 +576,15 @@ Value* ComptimePass::evaluateLoadInst(LoadInst* load, ValueMap& valueMap) {
     return nullptr;
 }
 
-Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap) {
+Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
+                                       bool skipSideEffect) {
     Value* value = getValueOrConstant(store->getValueOperand(), valueMap);
     Value* ptr = store->getPointerOperand();
 
-    if (!value) {
-        updateValueMap(ptr, nullptr, valueMap);
+    if (!value || skipSideEffect) {
+        if (updateValueMap(ptr, nullptr, valueMap)) {
+            markAsRuntime(store, valueMap);
+        }
         return nullptr;
     }
 
@@ -576,6 +594,8 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap) {
         } else {
             valueMap[ptr] = value;
         }
+    } else {
+        markAsRuntime(store, valueMap);
     }
     return store;
 }
@@ -601,23 +621,27 @@ Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
         }
     }
 
-    // Build a ConstantGEP chain
+    ConstantGEP* resultGEP = nullptr;
     if (auto* baseArr = dyn_cast<ConstantArray>(baseVal)) {
-        return ConstantGEP::get(baseArr, ciIndices);
+        resultGEP = ConstantGEP::get(baseArr, ciIndices);
     }
     if (auto* baseGep = dyn_cast<ConstantGEP>(baseVal)) {
-        return ConstantGEP::get(baseGep, ciIndices);
+        resultGEP = ConstantGEP::get(baseGep, ciIndices);
     }
+    if (resultGEP && !resultGEP->getArrayPointer())
+        resultGEP->setArrayPointer(gep->getBasePointer());
 
-    return nullptr;
+    return resultGEP;
 }
 
 Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                                      bool isPropagation) {
+                                      bool isPropagation, bool skipSideEffect) {
     Function* func = call->getCalledFunction();
 
     if (!func || func->isDeclaration()) {
         if (isPropagation) {
+            std::cout << "Invalidating arrays from call: " << call->getName()
+                      << std::endl;
             invalidateArraysFromCall(call, valueMap);
         }
         return nullptr;
@@ -637,10 +661,13 @@ Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
     if (!allArgsCompileTime) {
         // Non-compile-time call
         if (isPropagation) {
+            std::cout << "Invalidating arrays from call: " << call->getName()
+                      << std::endl;
             invalidateArraysFromCall(call, valueMap);
         }
         return nullptr;
     }
+    if (skipSideEffect) return nullptr;
 
     if (isPropagation) {
         return evaluateFunction(func, args, false, nullptr);
@@ -685,11 +712,13 @@ size_t ComptimePass::eliminateComputedInstructions(Function* func) {
 
     // Collect instructions to remove - must be compile-time and not runtime
     for (auto [value, computedValue] : globalValueMap) {
+        if (runtimeValues.find(value) != runtimeValues.end()) continue;
+
         if (auto inst = dyn_cast<Instruction>(value)) {
             if (isa<GetElementPtrInst>(inst) || isa<AllocaInst>(inst) ||
                 isa<BranchInst>(inst)) {
-                std::cerr << "[DEBUG] Skipping Inst: " << inst->getName()
-                          << std::endl;
+                std::cerr << "[DEBUG] Skipping Inst: "
+                          << IRPrinter::toString(inst);
                 continue;
             }
 
@@ -703,9 +732,8 @@ size_t ComptimePass::eliminateComputedInstructions(Function* func) {
                 continue;
             }
 
-            std::cout << "[DEBUG] Eliminating Inst: " << inst->getName()
-                      << " = " << IRPrinter::toString(computedValue)
-                      << std::endl;
+            std::cout << "[DEBUG] Eliminating Inst: "
+                      << IRPrinter::toString(inst);
 
             toRemove.push_back(inst);
         }
@@ -723,20 +751,19 @@ size_t ComptimePass::eliminateComputedInstructions(Function* func) {
     return toRemove.size();
 }
 
-void ComptimePass::initializeArrays(Module& module) {
-    // Initialize global arrays
+void ComptimePass::initializeValues(Module& module) {
+    // Initialize global values
     for (auto* gv : module.globals()) {
         if (globalValueMap.count(gv)) {
-            if (auto* arrayVal = dyn_cast<ConstantArray>(globalValueMap[gv])) {
-                gv->setInitializer(arrayVal);
-            }
+            gv->setInitializer(globalValueMap[gv]);
         }
     }
+
+    // TODO: init local non-array values
 
     // Initialize local arrays in main function
     Function* mainFunc = module.getFunction("main");
     if (!mainFunc) return;
-
     BasicBlock* entryBlock = &mainFunc->getEntryBlock();
     std::vector<std::pair<AllocaInst*, ConstantArray*>> localArrays;
 
@@ -775,8 +802,12 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
     bool useFullInit =
         (nonZeroCount > totalElements * 0.8) || (totalElements < 10);
 
+    Type* elemType = arrayValue->getType()->getBaseElementType();
+    Type* flattenedArrayType = ArrayType::get(elemType, totalElements);
+
     auto it = alloca->getIterator();
     while (isa<AllocaInst>(*it) && it != entryBlock->end()) ++it;
+
     if (useFullInit) {
         // Initialize all elements with GEP + store
         std::vector<std::pair<int, Constant*>> allIndices;
@@ -785,7 +816,8 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
         builder.setInsertPoint(*it);
         for (int i = 0; i < totalElements; ++i) {
             auto* idx = builder.getInt32(i);
-            auto* gep = builder.createGEP(alloca, idx);
+            auto* gep =
+                GetElementPtrInst::Create(flattenedArrayType, alloca, {idx});
 
             Constant* val = allIndices[i].second;
 
@@ -794,6 +826,7 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
                     arrayValue->getType()->getSingleElementType());
             }
 
+            builder.insert(gep);
             builder.createStore(val, gep);
         }
     } else {
@@ -805,10 +838,8 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
         BasicBlock* loopBody = BasicBlock::Create(
             mainFunc->getContext(),
             "comptime.array.body." + std::to_string(array_init_cnt));
-
         auto newBB = oldBB->split(it, {loopCond, loopBody});
         oldBB->push_back(BranchInst::Create(loopCond));
-
         // Loop cond
         builder.setInsertPoint(loopCond);
         auto* phi = builder.createPHI(
@@ -822,9 +853,10 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
 
         // Loop body
         builder.setInsertPoint(loopBody);
-        auto* gep = builder.createGEP(alloca, phi);
-        Type* elemType = arrayValue->getType()->getSingleElementType();
+        auto* gep =
+            GetElementPtrInst::Create(flattenedArrayType, alloca, {phi});
         Constant* zeroVal = createZeroInitializedConstant(elemType);
+        builder.insert(gep);
         builder.createStore(zeroVal, gep);
 
         auto* nextIdx = builder.createAdd(phi, builder.getInt32(1));
@@ -838,7 +870,7 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
         for (auto& [index, constant] : nonZeroIndices) {
             auto* idx = builder.getInt32(index);
             auto* gep =
-                GetElementPtrInst::Create(alloca->getType(), alloca, {idx});
+                GetElementPtrInst::Create(flattenedArrayType, alloca, {idx});
             newBB->push_front(StoreInst::Create(constant, gep));
             newBB->push_front(gep);
         }
@@ -880,7 +912,7 @@ int ComptimePass::countNonZeroElements(Constant* constant) {
 int ComptimePass::getTotalElements(Constant* constant) {
     if (auto* type = dyn_cast<ArrayType>(constant->getType())) {
         return type->getSizeInBytes() /
-               type->getSingleElementType()->getSizeInBytes();
+               type->getBaseElementType()->getSizeInBytes();
     }
     return 1;
 }
@@ -920,6 +952,12 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
                                              ValueMap& valueMap) {
     if (!startBlock || !endBlock) return;
 
+    // TODO: Ensure that the startBlock can also be propagated to (if some
+    // blocks loop back to startBlock)
+
+    std::cout
+        << "[DEBUG RuntimePropagation] Performing runtime propagation from "
+        << startBlock->getName() << " to " << endBlock->getName() << std::endl;
     // BFS from all successors of startBlock to endBlock (exclusive)
     std::queue<BasicBlock*> worklist;
     VisitedSet visited;
@@ -942,9 +980,15 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
                 // Mark store target as runtime
                 Value* ptr = store->getPointerOperand();
                 markAsRuntime(ptr, valueMap);
+                std::cout << "[DEBUG RuntimePropagation] Marking store target "
+                             "as runtime: "
+                          << IRPrinter::toString(ptr) << std::endl;
             } else if (auto* call = dyn_cast<CallInst>(inst)) {
                 // Treat as runtime call - invalidate arrays
                 invalidateArraysFromCall(call, valueMap);
+                std::cout << "[DEBUG RuntimePropagation] Invalidating arrays "
+                             "from call: "
+                          << IRPrinter::toString(call) << std::endl;
             }
         }
 
@@ -968,9 +1012,7 @@ void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap) {
         markAsRuntime(gep->getPointerOperand(), valueMap);
     }
     if (auto* constGEP = dyn_cast<ConstantGEP>(value)) {
-        throw std::runtime_error(
-            "ConstantGEP not supported in markAsRuntime yet");
-        // TODO: markAsRuntime(constGEP->getBaseArray(), valueMap);
+        markAsRuntime(constGEP->getArrayPointer(), valueMap);
     }
 }
 
@@ -1010,7 +1052,7 @@ BasicBlock* ComptimePass::getPostImmediateDominator(BasicBlock* block) {
 
     // Use the existing PostDominanceInfo
     auto* postDomInfo = analysisManager->getAnalysis<PostDominanceInfo>(
-        "PostDominanceAnalysis", *block->getParent());
+        PostDominanceAnalysis::getName(), *block->getParent());
     if (!postDomInfo) {
         return nullptr;
     }

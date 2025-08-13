@@ -32,6 +32,7 @@ class IRPrinter {
 
     // Print individual components
     std::string print(const Module* module);
+    std::string print(std::unique_ptr<Module>& module);
     std::string print(const Function* func);
     std::string print(const BasicBlock* bb);
     std::string print(const Instruction* inst);

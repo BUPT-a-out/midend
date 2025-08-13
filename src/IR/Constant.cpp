@@ -75,7 +75,8 @@ ConstantGEP* ConstantGEP::get(ConstantGEP* base, size_t index) {
     auto* nextArray = dyn_cast<ConstantArray>(base->getElement());
     if (!nextArray) return nullptr;
     auto* elemPtrTy = PointerType::get(nextArray->getType()->getElementType());
-    return new ConstantGEP(elemPtrTy, nextArray, index);
+    return new ConstantGEP(elemPtrTy, nextArray, index,
+                           base->getArrayPointer());
 }
 
 ConstantGEP* ConstantGEP::get(ConstantArray* arr, ConstantInt* indexConst) {

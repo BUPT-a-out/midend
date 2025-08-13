@@ -52,6 +52,10 @@ class IRBuilder {
         insertPt_ = inst->getIterator();
     }
 
+    void insert(Instruction* inst, const std::string& name = "") {
+        insertHelper(inst, name);
+    }
+
     BasicBlock* getInsertBlock() const { return insertBB_; }
     BasicBlock::iterator getInsertPoint() const { return insertPt_; }
 

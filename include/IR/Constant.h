@@ -161,9 +161,14 @@ class ConstantGEP : public Constant {
    private:
     ConstantArray* array_;
     size_t index_;
+    Value* arrayPtr_;
 
-    ConstantGEP(PointerType* ty, ConstantArray* arr, size_t idx)
-        : Constant(ty, ValueKind::ConstantGEP), array_(arr), index_(idx) {}
+    ConstantGEP(PointerType* ty, ConstantArray* arr, size_t idx,
+                Value* arrPtr = nullptr)
+        : Constant(ty, ValueKind::ConstantGEP),
+          array_(arr),
+          index_(idx),
+          arrayPtr_(arrPtr) {}
 
    public:
     // 1) ConstantArray*, size_t
@@ -193,6 +198,9 @@ class ConstantGEP : public Constant {
     Constant* getElement() const {
         return array_ ? array_->getElement(index_) : nullptr;
     }
+
+    Value* getArrayPointer() const { return arrayPtr_; }
+    void setArrayPointer(Value* ptr) { arrayPtr_ = ptr; }
 
     std::string toString() const override {
         return std::string("gep(") +
