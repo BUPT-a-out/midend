@@ -1338,3 +1338,525 @@ define i32 @runtimeFunc()
 
 )");
 }
+
+// Test 15: Mixed compile-time/runtime lifecycle transitions
+TEST_F(ComptimeTest, MixedComptimeRuntimeLifecycle) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto compTimeBB = BasicBlock::Create(ctx.get(), "comptime_path", func);
+    auto runtimeBB = BasicBlock::Create(ctx.get(), "runtime_path", func);
+    auto mergeBB = BasicBlock::Create(ctx.get(), "merge", func);
+
+    builder->setInsertPoint(entryBB);
+    // Start with compile-time condition
+    auto comptimeVal = builder->createAdd(builder->getInt32(5),
+                                          builder->getInt32(3), "comptime_add");
+    auto comptimeCond = builder->createICmpEQ(comptimeVal, builder->getInt32(8),
+                                              "comptime_cond");
+    builder->createCondBr(comptimeCond, compTimeBB, runtimeBB);
+
+    // Compile-time path - values should be computed at compile time
+    builder->setInsertPoint(compTimeBB);
+    auto comptimeResult = builder->createMul(
+        builder->getInt32(10), builder->getInt32(4), "comptime_result");
+    builder->createBr(mergeBB);
+
+    // Runtime path - should not be taken due to compile-time condition
+    builder->setInsertPoint(runtimeBB);
+    auto runtimeCall = builder->createCall(getRuntimeFunction(), {});
+    auto runtimeResult = builder->createAdd(runtimeCall, builder->getInt32(100),
+                                            "runtime_result");
+    builder->createBr(mergeBB);
+
+    // Merge - PHI should be resolved to compile-time value
+    builder->setInsertPoint(mergeBB);
+    auto phi = builder->createPHI(intType, "merged_value");
+    phi->addIncoming(comptimeResult, compTimeBB);
+    phi->addIncoming(runtimeResult, runtimeBB);
+
+    // Continue with more compile-time operations
+    auto finalComptime =
+        builder->createAdd(phi, builder->getInt32(20), "final_comptime");
+    builder->createRet(finalComptime);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // After pass - should eliminate runtime path and compute final result: 40 +
+    // 20 = 60
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("ret i32 60") != std::string::npos);
+}
+
+// Test 16: Complex multidimensional global arrays
+TEST_F(ComptimeTest, ComplexMultidimensionalGlobalArrays) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {});
+
+    // Create 4D global array: global_4d[2][3][2][2]
+    auto innerType = ArrayType::get(intType, 2);
+    auto level2Type = ArrayType::get(innerType, 2);
+    auto level3Type = ArrayType::get(level2Type, 3);
+    auto globalArrayType = ArrayType::get(level3Type, 2);
+
+    // Initialize with zeros
+    std::vector<Constant*> zeros;
+    std::function<void(Type*, std::vector<Constant*>&)> createZeros =
+        [&](Type* type, std::vector<Constant*>& vec) {
+            if (auto arrayType = dyn_cast<ArrayType>(type)) {
+                std::vector<Constant*> elements;
+                for (size_t i = 0; i < arrayType->getNumElements(); i++) {
+                    createZeros(arrayType->getElementType(), elements);
+                }
+                vec.push_back(ConstantArray::get(arrayType, elements));
+            } else {
+                vec.push_back(builder->getInt32(0));
+            }
+        };
+
+    createZeros(globalArrayType, zeros);
+    auto globalArray = GlobalVariable::Create(
+        globalArrayType, false, GlobalVariable::InternalLinkage, zeros[0],
+        "global_4d", module.get());
+
+    auto func = Function::Create(funcType, "main", module.get());
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entryBB);
+
+    // Set some compile-time values: global_4d[1][2][1][0] = 42,
+    // global_4d[0][1][0][1] = 77
+    auto gep1 =
+        builder->createGEP(globalArrayType, globalArray,
+                           {builder->getInt32(1), builder->getInt32(2),
+                            builder->getInt32(1), builder->getInt32(0)});
+    builder->createStore(builder->getInt32(42), gep1);
+
+    auto gep2 =
+        builder->createGEP(globalArrayType, globalArray,
+                           {builder->getInt32(0), builder->getInt32(1),
+                            builder->getInt32(0), builder->getInt32(1)});
+    builder->createStore(builder->getInt32(77), gep2);
+
+    // Load and compute with compile-time indices
+    auto load1 = builder->createLoad(gep1, "load1");
+    auto load2 = builder->createLoad(gep2, "load2");
+    auto sum = builder->createAdd(load1, load2, "sum");
+    auto final = builder->createMul(sum, builder->getInt32(2), "final");
+
+    builder->createRet(final);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // Should compute: (42 + 77) * 2 = 238
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("ret i32 238") != std::string::npos);
+}
+
+// Test 17: Local variable promotion with complex control flow
+TEST_F(ComptimeTest, LocalVariablePromotionComplexControlFlow) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto loopHeaderBB = BasicBlock::Create(ctx.get(), "loop_header", func);
+    auto loopBodyBB = BasicBlock::Create(ctx.get(), "loop_body", func);
+    auto ifThenBB = BasicBlock::Create(ctx.get(), "if_then", func);
+    auto ifElseBB = BasicBlock::Create(ctx.get(), "if_else", func);
+    auto loopLatchBB = BasicBlock::Create(ctx.get(), "loop_latch", func);
+    auto exitBB = BasicBlock::Create(ctx.get(), "exit", func);
+
+    // Entry: allocate local variable and initialize
+    builder->setInsertPoint(entryBB);
+    auto localVar = builder->createAlloca(intType, nullptr, "local_var");
+    builder->createStore(builder->getInt32(10), localVar);
+    builder->createBr(loopHeaderBB);
+
+    // Loop header: i from 0 to 3
+    builder->setInsertPoint(loopHeaderBB);
+    auto loopIVar = builder->createPHI(intType, "loop_i");
+    loopIVar->addIncoming(builder->getInt32(0), entryBB);
+    auto loopCond =
+        builder->createICmpSLT(loopIVar, builder->getInt32(3), "loop_cond");
+    builder->createCondBr(loopCond, loopBodyBB, exitBB);
+
+    // Loop body: conditional based on compile-time value
+    builder->setInsertPoint(loopBodyBB);
+    auto currentVal = builder->createLoad(localVar, "current_val");
+    auto isEven = builder->createICmpEQ(
+        builder->createRem(loopIVar, builder->getInt32(2), "mod"),
+        builder->getInt32(0), "is_even");
+    builder->createCondBr(isEven, ifThenBB, ifElseBB);
+
+    // If then: multiply by 2
+    builder->setInsertPoint(ifThenBB);
+    auto doubled =
+        builder->createMul(currentVal, builder->getInt32(2), "doubled");
+    builder->createStore(doubled, localVar);
+    builder->createBr(loopLatchBB);
+
+    // If else: add 5
+    builder->setInsertPoint(ifElseBB);
+    auto added = builder->createAdd(currentVal, builder->getInt32(5), "added");
+    builder->createStore(added, localVar);
+    builder->createBr(loopLatchBB);
+
+    // Loop latch
+    builder->setInsertPoint(loopLatchBB);
+    auto nextI = builder->createAdd(loopIVar, builder->getInt32(1), "next_i");
+    builder->createBr(loopHeaderBB);
+    loopIVar->addIncoming(nextI, loopLatchBB);
+
+    // Exit
+    builder->setInsertPoint(exitBB);
+    auto finalLoad = builder->createLoad(localVar, "final_load");
+    builder->createRet(finalLoad);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // Should unroll loop and compute final value
+    // i=0 (even): 10 * 2 = 20
+    // i=1 (odd): 20 + 5 = 25
+    // i=2 (even): 25 * 2 = 50
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("ret i32 50") != std::string::npos);
+}
+
+// Test 18: Function calls with mixed compile-time and runtime arguments
+TEST_F(ComptimeTest, FunctionCallsMixedComptimeRuntimeArgs) {
+    auto intType = ctx->getIntegerType(32);
+
+    // Create helper function: compute(a, b) = a * a + b
+    auto helperFuncType = FunctionType::get(intType, {intType, intType});
+    auto helperFunc = Function::Create(helperFuncType, "compute", module.get());
+    auto helperBB = BasicBlock::Create(ctx.get(), "entry", helperFunc);
+    builder->setInsertPoint(helperBB);
+    auto param_a = helperFunc->getArg(0);
+    auto param_b = helperFunc->getArg(1);
+    auto squared = builder->createMul(param_a, param_a, "a_squared");
+    auto result = builder->createAdd(squared, param_b, "result");
+    builder->createRet(result);
+
+    // Main function
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entryBB);
+
+    // Mix compile-time and runtime values
+    auto comptimeArg = builder->getInt32(5);  // compile-time
+    auto runtimeArg = builder->createCall(getRuntimeFunction(), {});  // runtime
+
+    // Call 1: both compile-time (should be fully optimized)
+    auto call1 = builder->createCall(
+        helperFunc, {comptimeArg, builder->getInt32(10)}, "call1");
+
+    // Call 2: mixed (partial optimization)
+    auto call2 =
+        builder->createCall(helperFunc, {comptimeArg, runtimeArg}, "call2");
+
+    // Final computation
+    auto sum = builder->createAdd(call1, call2, "sum");
+    builder->createRet(sum);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // call1 should be optimized to: 5*5 + 10 = 35
+    // call2 should partially optimize: 25 + runtime_value
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("add i32 35") != std::string::npos ||
+                resultIR.find("add i32 25") != std::string::npos);
+}
+
+// Test 19: Array operations with runtime indices mixed with compile-time
+TEST_F(ComptimeTest, ArrayOperationsRuntimeIndicesWithComptime) {
+    auto intType = ctx->getIntegerType(32);
+    auto arrayType = ArrayType::get(intType, 10);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entryBB);
+
+    // Create array and initialize with compile-time values
+    auto array = builder->createAlloca(arrayType, nullptr, "array");
+    for (int i = 0; i < 5; i++) {
+        auto gep = builder->createGEP(arrayType, array, {builder->getInt32(i)});
+        builder->createStore(builder->getInt32(i * i), gep);  // Store i^2
+    }
+
+    // Mix compile-time and runtime access
+    auto comptimeIdx = builder->getInt32(3);
+    auto runtimeIdx = builder->createCall(getRuntimeFunction(), {});
+
+    // Compile-time access
+    auto comptimeGEP = builder->createGEP(arrayType, array, {comptimeIdx});
+    auto comptimeLoad = builder->createLoad(comptimeGEP, "comptime_load");
+
+    // Runtime access
+    auto runtimeGEP = builder->createGEP(arrayType, array, {runtimeIdx});
+    auto runtimeLoad = builder->createLoad(runtimeGEP, "runtime_load");
+
+    // Combine results
+    auto combined = builder->createAdd(comptimeLoad, runtimeLoad, "combined");
+    auto final = builder->createMul(combined, builder->getInt32(2), "final");
+
+    builder->createRet(final);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // Compile-time load should be optimized (array[3] = 9)
+    // Runtime access should remain
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("add i32 9") != std::string::npos);
+    EXPECT_TRUE(resultIR.find("load i32") !=
+                std::string::npos);  // Runtime load should remain
+}
+
+// Test 20: Nested function calls with compile-time propagation
+TEST_F(ComptimeTest, NestedFunctionCallsComptimePropagation) {
+    auto intType = ctx->getIntegerType(32);
+
+    // Helper1: square(x) = x * x
+    auto helper1Type = FunctionType::get(intType, {intType});
+    auto helper1 = Function::Create(helper1Type, "square", module.get());
+    auto h1BB = BasicBlock::Create(ctx.get(), "entry", helper1);
+    builder->setInsertPoint(h1BB);
+    auto h1_param = helper1->getArg(0);
+    auto h1_result = builder->createMul(h1_param, h1_param, "squared");
+    builder->createRet(h1_result);
+
+    // Helper2: add_ten(x) = x + 10
+    auto helper2Type = FunctionType::get(intType, {intType});
+    auto helper2 = Function::Create(helper2Type, "add_ten", module.get());
+    auto h2BB = BasicBlock::Create(ctx.get(), "entry", helper2);
+    builder->setInsertPoint(h2BB);
+    auto h2_param = helper2->getArg(0);
+    auto h2_result =
+        builder->createAdd(h2_param, builder->getInt32(10), "add_ten");
+    builder->createRet(h2_result);
+
+    // Helper3: combine(x, y) = square(x) + add_ten(y)
+    auto helper3Type = FunctionType::get(intType, {intType, intType});
+    auto helper3 = Function::Create(helper3Type, "combine", module.get());
+    auto h3BB = BasicBlock::Create(ctx.get(), "entry", helper3);
+    builder->setInsertPoint(h3BB);
+    auto h3_param1 = helper3->getArg(0);
+    auto h3_param2 = helper3->getArg(1);
+    auto h3_call1 = builder->createCall(helper1, {h3_param1}, "square_call");
+    auto h3_call2 = builder->createCall(helper2, {h3_param2}, "add_ten_call");
+    auto h3_result = builder->createAdd(h3_call1, h3_call2, "combined");
+    builder->createRet(h3_result);
+
+    // Main function
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entryBB);
+
+    // Nested calls with compile-time values
+    auto call1 = builder->createCall(
+        helper3, {builder->getInt32(4), builder->getInt32(6)}, "nested_call");
+    auto final = builder->createMul(call1, builder->getInt32(2), "final");
+
+    builder->createRet(final);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // Should compute: combine(4, 6) = square(4) + add_ten(6) = 16 + 16 = 32
+    // Final: 32 * 2 = 64
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("ret i32 64") != std::string::npos);
+}
+
+// Test 21: Pointer arithmetic with compile-time offsets
+TEST_F(ComptimeTest, PointerArithmeticComptimeOffsets) {
+    auto intType = ctx->getIntegerType(32);
+    auto ptrType = PointerType::get(intType);
+    auto arrayType = ArrayType::get(intType, 20);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entryBB);
+
+    // Create array and get base pointer
+    auto array = builder->createAlloca(arrayType, nullptr, "array");
+    auto basePtr = builder->createGEP(arrayType, array, {builder->getInt32(0)});
+
+    // Initialize some values
+    auto initGEP5 =
+        builder->createGEP(arrayType, array, {builder->getInt32(5)});
+    builder->createStore(builder->getInt32(100), initGEP5);
+    auto initGEP10 =
+        builder->createGEP(arrayType, array, {builder->getInt32(10)});
+    builder->createStore(builder->getInt32(200), initGEP10);
+
+    // Pointer arithmetic with compile-time offsets
+    auto offset1 = builder->getInt32(5);
+    auto offset2 = builder->getInt32(10);
+
+    auto ptr1 = builder->createGEP(intType, basePtr, {offset1});
+    auto ptr2 = builder->createGEP(intType, basePtr, {offset2});
+
+    auto load1 = builder->createLoad(ptr1, "load1");
+    auto load2 = builder->createLoad(ptr2, "load2");
+
+    // Compute pointer difference (compile-time calculable)
+    auto ptrDiff = builder->createSub(offset2, offset1, "ptr_diff");
+
+    // Final computation
+    auto sum = builder->createAdd(load1, load2, "sum");
+    auto final = builder->createAdd(sum, ptrDiff, "final");
+
+    builder->createRet(final);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // Should compute: 100 + 200 + (10 - 5) = 305
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("ret i32 305") != std::string::npos);
+}
+
+// Test 22: Compile-time loop unrolling with simple counting loop
+TEST_F(ComptimeTest, CompileTimeLoopUnrollingSimple) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto loopHeaderBB = BasicBlock::Create(ctx.get(), "loop_header", func);
+    auto loopBodyBB = BasicBlock::Create(ctx.get(), "loop_body", func);
+    auto exitBB = BasicBlock::Create(ctx.get(), "exit", func);
+
+    // Entry: initialize sum = 0
+    builder->setInsertPoint(entryBB);
+    auto sumVar = builder->createAlloca(intType, nullptr, "sum");
+    builder->createStore(builder->getInt32(0), sumVar);
+    builder->createBr(loopHeaderBB);
+
+    // Loop header: for(i = 0; i < 5; i++)
+    builder->setInsertPoint(loopHeaderBB);
+    auto loopIVar = builder->createPHI(intType, "loop_i");
+    loopIVar->addIncoming(builder->getInt32(0), entryBB);
+    auto loopCond =
+        builder->createICmpSLT(loopIVar, builder->getInt32(5), "loop_cond");
+    builder->createCondBr(loopCond, loopBodyBB, exitBB);
+
+    // Loop body: sum += i * 2
+    builder->setInsertPoint(loopBodyBB);
+    auto currentSum = builder->createLoad(sumVar, "current_sum");
+    auto doubled_i =
+        builder->createMul(loopIVar, builder->getInt32(2), "doubled_i");
+    auto newSum = builder->createAdd(currentSum, doubled_i, "new_sum");
+    builder->createStore(newSum, sumVar);
+
+    auto nextI = builder->createAdd(loopIVar, builder->getInt32(1), "next_i");
+    builder->createBr(loopHeaderBB);
+    loopIVar->addIncoming(nextI, loopBodyBB);
+
+    // Exit
+    builder->setInsertPoint(exitBB);
+    auto finalSum = builder->createLoad(sumVar, "final_sum");
+    builder->createRet(finalSum);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // Should unroll to: 0*2 + 1*2 + 2*2 + 3*2 + 4*2 = 0 + 2 + 4 + 6 + 8 = 20
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("ret i32 20") != std::string::npos);
+}
+
+// Test 23: Complex loop unrolling with nested conditions
+TEST_F(ComptimeTest, ComplexLoopUnrollingWithConditions) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto loopHeaderBB = BasicBlock::Create(ctx.get(), "loop_header", func);
+    auto loopBodyBB = BasicBlock::Create(ctx.get(), "loop_body", func);
+    auto ifEvenBB = BasicBlock::Create(ctx.get(), "if_even", func);
+    auto ifOddBB = BasicBlock::Create(ctx.get(), "if_odd", func);
+    auto loopLatchBB = BasicBlock::Create(ctx.get(), "loop_latch", func);
+    auto exitBB = BasicBlock::Create(ctx.get(), "exit", func);
+
+    // Entry: initialize result = 1
+    builder->setInsertPoint(entryBB);
+    auto resultVar = builder->createAlloca(intType, nullptr, "result");
+    builder->createStore(builder->getInt32(1), resultVar);
+    builder->createBr(loopHeaderBB);
+
+    // Loop header: for(i = 1; i <= 4; i++)
+    builder->setInsertPoint(loopHeaderBB);
+    auto loopIVar = builder->createPHI(intType, "loop_i");
+    loopIVar->addIncoming(builder->getInt32(1), entryBB);
+    auto loopCond =
+        builder->createICmpSLE(loopIVar, builder->getInt32(4), "loop_cond");
+    builder->createCondBr(loopCond, loopBodyBB, exitBB);
+
+    // Loop body: check if i is even or odd
+    builder->setInsertPoint(loopBodyBB);
+    auto isEven = builder->createICmpEQ(
+        builder->createRem(loopIVar, builder->getInt32(2), "mod"),
+        builder->getInt32(0), "is_even");
+    builder->createCondBr(isEven, ifEvenBB, ifOddBB);
+
+    // If even: result *= i
+    builder->setInsertPoint(ifEvenBB);
+    auto currentResult1 = builder->createLoad(resultVar, "current_result1");
+    auto evenResult =
+        builder->createMul(currentResult1, loopIVar, "even_result");
+    builder->createStore(evenResult, resultVar);
+    builder->createBr(loopLatchBB);
+
+    // If odd: result += i * 3
+    builder->setInsertPoint(ifOddBB);
+    auto currentResult2 = builder->createLoad(resultVar, "current_result2");
+    auto tripled =
+        builder->createMul(loopIVar, builder->getInt32(3), "tripled");
+    auto oddResult = builder->createAdd(currentResult2, tripled, "odd_result");
+    builder->createStore(oddResult, resultVar);
+    builder->createBr(loopLatchBB);
+
+    // Loop latch
+    builder->setInsertPoint(loopLatchBB);
+    auto nextI = builder->createAdd(loopIVar, builder->getInt32(1), "next_i");
+    builder->createBr(loopHeaderBB);
+    loopIVar->addIncoming(nextI, loopLatchBB);
+
+    // Exit
+    builder->setInsertPoint(exitBB);
+    auto finalResult = builder->createLoad(resultVar, "final_result");
+    builder->createRet(finalResult);
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    // Should unroll to:
+    // i=1 (odd): result = 1 + 1*3 = 4
+    // i=2 (even): result = 4 * 2 = 8
+    // i=3 (odd): result = 8 + 3*3 = 17
+    // i=4 (even): result = 17 * 4 = 68
+    auto resultIR = IRPrinter().print(func);
+    EXPECT_TRUE(resultIR.find("ret i32 68") != std::string::npos);
+}
