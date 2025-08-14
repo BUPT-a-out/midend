@@ -22,11 +22,11 @@ target("midend")
     add_cxxflags("-Wall", "-Wextra")
     
     if is_mode("debug") then
-        add_cxxflags("-g", "-O0")
+        add_cxxflags("-g", "-O0", "-DA_OUT_DEBUG")
         set_symbols("debug")
         set_optimize("none")
     elseif is_mode("release") then
-        add_cxxflags("-O3", "-DNDEBUG")
+        add_cxxflags("-O3")
         set_symbols("hidden")
         set_optimize("fastest")
     elseif is_mode("coverage") then

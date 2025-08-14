@@ -49,6 +49,8 @@ class ComptimePass : public ModulePass {
     ComptimeSet comptimeInsts;  // Instructions confirmed as compile-time
     AnalysisManager* analysisManager = nullptr;
 
+    bool isPropagation;
+
     void initializeGlobalValueMap(Module& module);
 
     // Unified evaluation function - pass ComptimeSet as nullptr for propagation
@@ -72,7 +74,7 @@ class ComptimePass : public ModulePass {
                              bool skipSideEffect);
     Value* evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap);
     Value* evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                            bool isPropagation, bool skipSideEffect);
+                            bool isMainFunction, bool skipSideEffect);
     Value* evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
 
     void markAsRuntime(Value* value, ValueMap& valueMap);

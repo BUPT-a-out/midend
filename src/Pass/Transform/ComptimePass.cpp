@@ -31,6 +31,8 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
     globalValueMap.clear();
     runtimeValues.clear();
     comptimeInsts.clear();
+    isPropagation = true;
+
     bool changed = false;
 
     initializeGlobalValueMap(module);
@@ -54,6 +56,7 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
         // Pass 2: Computation - compute actual values with fresh value map
         globalValueMap.clear();
         initializeGlobalValueMap(module);
+        isPropagation = false;
         evaluateFunction(mainFunc, {}, true, &comptimeInsts);
 
         // Step 3: Eliminate computed instructions
@@ -228,6 +231,12 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
         }
         valueMap[key] = result;
     } else if (valueMap.find(key) != valueMap.end()) {
+        if (!isPropagation) {
+            if (auto gv = dyn_cast<GlobalVariable>(key);
+                gv && !gv->getValueType()->isArrayType()) {
+                gv->setInitializer(valueMap[key]);
+            }
+        }
         valueMap.erase(key);
         markAsRuntime(key, valueMap);
         runtime = true;
@@ -635,11 +644,12 @@ Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
 }
 
 Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                                      bool isPropagation, bool skipSideEffect) {
+                                      bool isMainFunction,
+                                      bool skipSideEffect) {
     Function* func = call->getCalledFunction();
 
     if (!func || func->isDeclaration()) {
-        if (isPropagation) {
+        if (isMainFunction) {
             std::cout << "Invalidating arrays from call: " << call->getName()
                       << std::endl;
             invalidateArraysFromCall(call, valueMap);
@@ -660,7 +670,7 @@ Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
 
     if (!allArgsCompileTime) {
         // Non-compile-time call
-        if (isPropagation) {
+        if (isMainFunction) {
             std::cout << "Invalidating arrays from call: " << call->getName()
                       << std::endl;
             invalidateArraysFromCall(call, valueMap);
@@ -669,10 +679,7 @@ Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
     }
     if (skipSideEffect) return nullptr;
 
-    if (isPropagation) {
-        return evaluateFunction(func, args, false, nullptr);
-    }
-    return evaluateFunction(func, args, false, &comptimeInsts);
+    return evaluateFunction(func, args, false, nullptr);
 }
 
 Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
