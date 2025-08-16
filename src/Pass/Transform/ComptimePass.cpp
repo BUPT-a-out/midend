@@ -64,6 +64,7 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
 
         // Pass 2: Computation - compute actual values with fresh value map
         globalValueMap.clear();
+        runtimeValues.clear();
         initializeGlobalValueMap(module);
         isPropagation = false;
         evaluateFunction(mainFunc, {}, true, &comptimeInsts);
@@ -638,7 +639,7 @@ Value* ComptimePass::evaluateLoadInst(LoadInst* load, ValueMap& valueMap) {
     Value* ptr = load->getPointerOperand();
 
     // If the pointer is in the value map, return its value
-    if (valueMap.count(ptr)) {
+    if (valueMap.count(ptr) && runtimeValues.find(ptr) == runtimeValues.end()) {
         Value* v = valueMap[ptr];
         if (auto* gepConst = dyn_cast<ConstantGEP>(v)) {
             return gepConst->getElement();
