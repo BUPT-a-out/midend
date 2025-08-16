@@ -54,9 +54,9 @@ class ComptimePass : public ModulePass {
     void initializeGlobalValueMap(Module& module);
 
     // Unified evaluation function - pass ComptimeSet as nullptr for propagation
-    Value* evaluateFunction(Function* func, const std::vector<Value*>& args,
-                            bool isMainFunction,
-                            const ComptimeSet* comptimeSet = nullptr);
+    std::pair<Value*, bool> evaluateFunction(
+        Function* func, const std::vector<Value*>& args, bool isMainFunction,
+        const ComptimeSet* comptimeSet = nullptr);
 
     void evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                        ValueMap& valueMap, bool isMainFunction,
@@ -73,8 +73,9 @@ class ComptimePass : public ModulePass {
     Value* evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
                              bool skipSideEffect);
     Value* evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap);
-    Value* evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                            bool isMainFunction, bool skipSideEffect);
+    std::pair<Value*, bool> evaluateCallInst(CallInst* call, ValueMap& valueMap,
+                                             bool isMainFunction,
+                                             bool skipSideEffect);
     Value* evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
 
     void markAsRuntime(Value* value, ValueMap& valueMap);

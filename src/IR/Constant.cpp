@@ -73,16 +73,35 @@ ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
         size_t elementStride = arrayType->getElementType()->getSizeInBytes() /
                                baseType->getSizeInBytes();
         flatIndex = index * elementStride;
+    } else if (auto* ptrType = dyn_cast<PointerType>(indexType)) {
+        // For pointer types, we need to check what the pointer points to
+        Type* pointedType = ptrType->getElementType();
+        Type* baseType = arr->getType()->getBaseElementType();
+
+        if (auto* pointedArrayType = dyn_cast<ArrayType>(pointedType)) {
+            // Pointer to array: index moves by the size of the array
+            size_t elementStride =
+                pointedArrayType->getSizeInBytes() / baseType->getSizeInBytes();
+            flatIndex = index * elementStride;
+        } else {
+            // Pointer to scalar: index moves by size of the scalar
+            size_t elementStride =
+                pointedType->getSizeInBytes() / baseType->getSizeInBytes();
+            flatIndex = index * elementStride;
+        }
+        // No bounds checking for pointers since they can point anywhere
     }
 
 #ifdef A_OUT_DEBUG
-    // Check bound
-    size_t totalElements = arr->getNumElements();
-    if (flatIndex >= totalElements) {
-        throw std::runtime_error("ConstantGEP: index " +
-                                 std::to_string(flatIndex) +
-                                 " out of bounds for array of size " +
-                                 std::to_string(totalElements));
+    // Check bound only for array types, not for pointer types
+    if (!isa<PointerType>(indexType)) {
+        size_t totalElements = arr->getNumElements();
+        if (flatIndex >= totalElements) {
+            throw std::runtime_error("ConstantGEP: index " +
+                                     std::to_string(flatIndex) +
+                                     " out of bounds for array of size " +
+                                     std::to_string(totalElements));
+        }
     }
 #endif
 
@@ -167,6 +186,7 @@ ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
     Type* currentType = indexType;
     Type* baseType = arr->getType()->getBaseElementType();
 
+    bool isPointerType = isa<PointerType>(indexType);
     for (size_t i = 0; i < indices.size(); ++i) {
         if (!indices[i]) return nullptr;
         int32_t idx = indices[i]->getSignedValue();
@@ -179,6 +199,22 @@ ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
             flatIndex += idx * elementStride;
 
             currentType = elementType;
+        } else if (auto* ptrType = dyn_cast<PointerType>(currentType)) {
+            // For pointer types, the first index moves by the size of the
+            // pointed-to type
+            Type* pointedType = ptrType->getElementType();
+            if (auto* pointedArrayType = dyn_cast<ArrayType>(pointedType)) {
+                // Pointer to array: first index moves by array size
+                size_t arrayStride = pointedArrayType->getSizeInBytes() /
+                                     baseType->getSizeInBytes();
+                flatIndex += idx * arrayStride;
+                currentType = pointedArrayType;  // Continue with the array type
+                                                 // for next indices
+            } else {
+                // Pointer to scalar: just use index directly
+                flatIndex += idx;
+                currentType = pointedType;
+            }
         } else {
             if (i != indices.size() - 1) return nullptr;
             flatIndex += idx;
@@ -186,12 +222,15 @@ ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
     }
 
 #ifdef A_OUT_DEBUG
-    size_t totalElements = arr->getNumElements();
-    if (flatIndex >= totalElements) {
-        throw std::runtime_error("ConstantGEP: index " +
-                                 std::to_string(flatIndex) +
-                                 " out of bounds for array of size " +
-                                 std::to_string(totalElements));
+    // Check bound only for non-pointer types
+    if (!isPointerType) {
+        size_t totalElements = arr->getNumElements();
+        if (flatIndex >= totalElements) {
+            throw std::runtime_error("ConstantGEP: index " +
+                                     std::to_string(flatIndex) +
+                                     " out of bounds for array of size " +
+                                     std::to_string(totalElements));
+        }
     }
 #endif
 

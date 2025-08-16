@@ -138,17 +138,17 @@ void ComptimePass::initializeGlobalValueMap(Module& module) {
     }
 }
 
-Value* ComptimePass::evaluateFunction(Function* func,
-                                      const std::vector<Value*>& args,
-                                      bool isMainFunction,
-                                      const ComptimeSet* comptimeSet) {
+std::pair<Value*, bool> ComptimePass::evaluateFunction(
+    Function* func, const std::vector<Value*>& args, bool isMainFunction,
+    const ComptimeSet* comptimeSet) {
     if (func->isDeclaration()) {
-        return nullptr;
+        return std::make_pair(nullptr, false);
     }
 
     // Use appropriate value map based on mode and function
     ValueMap localValueMap;
     ValueMap& valueMap = isMainFunction ? globalValueMap : localValueMap;
+    bool runtime = false;
 
     // Bind function arguments
     for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
@@ -190,6 +190,7 @@ Value* ComptimePass::evaluateFunction(Function* func,
                     // Runtime condition - perform runtime propagation
                     BasicBlock* postDom =
                         getPostImmediateDominator(currentBlock);
+                    runtime = true;
                     performRuntimePropagation(currentBlock, postDom, valueMap);
                     currentBlock = postDom;
                     prevBlock = nullptr;  // Mark as non-compile-time state
@@ -206,7 +207,7 @@ Value* ComptimePass::evaluateFunction(Function* func,
                 << (returnValue ? IRPrinter::toString(returnValue) : "nullptr")
                 << std::endl;
 
-    return returnValue;
+    return std::make_pair(returnValue, returnValue != nullptr && !runtime);
 }
 
 void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
@@ -255,8 +256,12 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
         } else if (auto* gep = dyn_cast<GetElementPtrInst>(inst)) {
             result = evaluateGEP(gep, valueMap);
         } else if (auto* call = dyn_cast<CallInst>(inst)) {
-            result = evaluateCallInst(call, valueMap, isMainFunction,
-                                      skipSideEffect);
+            auto [res, comptime] = evaluateCallInst(
+                call, valueMap, isMainFunction, skipSideEffect);
+            result = res;
+            if (!comptime) {
+                markAsRuntime(inst, valueMap);
+            }
         } else if (auto* cast = dyn_cast<CastInst>(inst)) {
             result = evaluateCastInst(cast, valueMap);
         } else {
@@ -703,9 +708,10 @@ Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
     return resultGEP;
 }
 
-Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                                      bool isMainFunction,
-                                      bool skipSideEffect) {
+std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
+                                                       ValueMap& valueMap,
+                                                       bool isMainFunction,
+                                                       bool skipSideEffect) {
     Function* func = call->getCalledFunction();
 
     if (!func || func->isDeclaration()) {
@@ -714,7 +720,7 @@ Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
                         << std::endl;
             invalidateArraysFromCall(call, valueMap);
         }
-        return nullptr;
+        return std::make_pair(nullptr, false);
     }
 
     std::vector<Value*> args;
@@ -735,9 +741,9 @@ Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
                         << std::endl;
             invalidateArraysFromCall(call, valueMap);
         }
-        return nullptr;
+        return std::make_pair(nullptr, false);
     }
-    if (skipSideEffect) return nullptr;
+    if (skipSideEffect) return std::make_pair(nullptr, false);
 
     return evaluateFunction(func, args, false, nullptr);
 }
@@ -920,7 +926,6 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
         }
     } else {
         static int array_init_cnt = 0;
-        array_init_cnt++;
         auto oldBB = alloca->getParent();
         BasicBlock* loopCond = BasicBlock::Create(
             mainFunc->getContext(),
@@ -964,6 +969,7 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
             newBB->push_front(StoreInst::Create(constant, gep));
             newBB->push_front(gep);
         }
+        array_init_cnt++;
     }
 }
 
