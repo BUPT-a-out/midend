@@ -160,30 +160,33 @@ class ConstantArray : public Constant {
 class ConstantGEP : public Constant {
    private:
     ConstantArray* array_;
+    Type* indexType_;
     size_t index_;
     Value* arrayPtr_;
 
-    ConstantGEP(PointerType* ty, ConstantArray* arr, size_t idx,
-                Value* arrPtr = nullptr)
+    ConstantGEP(PointerType* ty, ConstantArray* arr, Type* indexType,
+                size_t idx, Value* arrPtr = nullptr)
         : Constant(ty, ValueKind::ConstantGEP),
           array_(arr),
+          indexType_(indexType),
           index_(idx),
           arrayPtr_(arrPtr) {}
 
    public:
-    // 1) ConstantArray*, size_t
-    static ConstantGEP* get(ConstantArray* arr, size_t index);
+    // 1) ConstantArray*, Type*, size_t
+    static ConstantGEP* get(ConstantArray* arr, Type* indexType, size_t index);
     // 2) ConstantGEP*, size_t
     static ConstantGEP* get(ConstantGEP* base, size_t index);
-    // 3) ConstantArray*, ConstantInt*
-    static ConstantGEP* get(ConstantArray* arr, ConstantInt* indexConst);
+    // 3) ConstantArray*, Type*, ConstantInt*
+    static ConstantGEP* get(ConstantArray* arr, Type* indexType,
+                            ConstantInt* indexConst);
     // 4) ConstantGEP*, ConstantInt*
     static ConstantGEP* get(ConstantGEP* base, ConstantInt* indexConst);
-    // 5) ConstantArray*, std::vector<size_t>
-    static ConstantGEP* get(ConstantArray* arr,
+    // 5) ConstantArray*, Type*, std::vector<size_t>
+    static ConstantGEP* get(ConstantArray* arr, Type* indexType,
                             const std::vector<size_t>& indices);
-    // 6) ConstantArray*, std::vector<ConstantInt*>
-    static ConstantGEP* get(ConstantArray* arr,
+    // 6) ConstantArray*, Type*, std::vector<ConstantInt*>
+    static ConstantGEP* get(ConstantArray* arr, Type* indexType,
                             const std::vector<ConstantInt*>& indices);
     // 7) ConstantGEP*, std::vector<size_t>
     static ConstantGEP* get(ConstantGEP* base,
@@ -193,6 +196,7 @@ class ConstantGEP : public Constant {
                             const std::vector<ConstantInt*>& indices);
 
     ConstantArray* getArray() const { return array_; }
+    Type* getIndexType() const { return indexType_; }
     size_t getIndex() const { return index_; }
 
     Constant* getElement() const {
@@ -205,7 +209,8 @@ class ConstantGEP : public Constant {
     std::string toString() const override {
         return std::string("gep(") +
                (array_ ? array_->toString() : std::string("null")) + ", " +
-               std::to_string(index_) + ")";
+               (indexType_ ? indexType_->toString() : std::string("null")) +
+               ", " + std::to_string(index_) + ")";
     }
 
     void setElementValue(Value* newValue);

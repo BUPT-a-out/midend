@@ -63,27 +63,81 @@ ConstantArray* ConstantArray::get(ArrayType* ty,
     return new ConstantArray(ty, std::move(elements));
 }
 
-ConstantGEP* ConstantGEP::get(ConstantArray* arr, size_t index) {
-    if (!arr) return nullptr;
-    auto* elemPtrTy = PointerType::get(arr->getType()->getElementType());
-    return new ConstantGEP(elemPtrTy, arr, index);
+ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
+                              size_t index) {
+    if (!arr || !indexType) return nullptr;
+
+    size_t flatIndex = index;
+    if (auto* arrayType = dyn_cast<ArrayType>(indexType)) {
+        Type* baseType = arr->getType()->getBaseElementType();
+        size_t elementStride = arrayType->getElementType()->getSizeInBytes() /
+                               baseType->getSizeInBytes();
+        flatIndex = index * elementStride;
+    }
+
+#ifdef A_OUT_DEBUG
+    // Check bound
+    size_t totalElements = arr->getNumElements();
+    if (flatIndex >= totalElements) {
+        throw std::runtime_error("ConstantGEP: index " +
+                                 std::to_string(flatIndex) +
+                                 " out of bounds for array of size " +
+                                 std::to_string(totalElements));
+    }
+#endif
+
+    auto* elemPtrTy = PointerType::get(arr->getType()->getBaseElementType());
+    return new ConstantGEP(elemPtrTy, arr, indexType, flatIndex);
 }
 
 ConstantGEP* ConstantGEP::get(ConstantGEP* base, size_t index) {
     if (!base) return nullptr;
-    // Multi-dimensional: use base->getElement() which should return Constant*
-    auto* nextArray = dyn_cast<ConstantArray>(base->getElement());
-    if (!nextArray) return nullptr;
-    auto* elemPtrTy = PointerType::get(nextArray->getType()->getElementType());
-    return new ConstantGEP(elemPtrTy, nextArray, index,
-                           base->getArrayPointer());
+
+    Type* newIndexType = nullptr;
+    size_t additionalOffset = 0;
+
+    if (auto* arrayType = dyn_cast<ArrayType>(base->getIndexType())) {
+        newIndexType = arrayType->getElementType();
+
+        if (auto* elemArrayType = dyn_cast<ArrayType>(newIndexType)) {
+            size_t stride =
+                elemArrayType->getSizeInBytes() / base->getArray()
+                                                      ->getType()
+                                                      ->getBaseElementType()
+                                                      ->getSizeInBytes();
+            additionalOffset = index * stride;
+        } else {
+            additionalOffset = index;
+        }
+    } else {
+        return nullptr;
+    }
+
+    size_t newFlatIndex = base->getIndex() + additionalOffset;
+
+#ifdef A_OUT_DEBUG
+    // Check bounds
+    size_t totalElements = base->getArray()->getNumElements();
+    if (newFlatIndex >= totalElements) {
+        throw std::runtime_error("ConstantGEP: index " +
+                                 std::to_string(newFlatIndex) +
+                                 " out of bounds for array of size " +
+                                 std::to_string(totalElements));
+    }
+#endif
+
+    auto* elemPtrTy =
+        PointerType::get(base->getArray()->getType()->getBaseElementType());
+    return new ConstantGEP(elemPtrTy, base->getArray(), newIndexType,
+                           newFlatIndex, base->getArrayPointer());
 }
 
-ConstantGEP* ConstantGEP::get(ConstantArray* arr, ConstantInt* indexConst) {
-    if (!arr || !indexConst) return nullptr;
+ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
+                              ConstantInt* indexConst) {
+    if (!arr || !indexType || !indexConst) return nullptr;
     int32_t signedIdx = indexConst->getSignedValue();
     if (signedIdx < 0) return nullptr;
-    return get(arr, static_cast<size_t>(signedIdx));
+    return get(arr, indexType, static_cast<size_t>(signedIdx));
 }
 
 ConstantGEP* ConstantGEP::get(ConstantGEP* base, ConstantInt* indexConst) {
@@ -93,30 +147,56 @@ ConstantGEP* ConstantGEP::get(ConstantGEP* base, ConstantInt* indexConst) {
     return get(base, static_cast<size_t>(signedIdx));
 }
 
-ConstantGEP* ConstantGEP::get(ConstantArray* arr,
+ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
                               const std::vector<size_t>& indices) {
-    if (!arr) return nullptr;
+    if (!arr || !indexType) return nullptr;
     ConstantGEP* current = nullptr;
     for (size_t i = 0; i < indices.size(); ++i) {
-        current = (i == 0) ? get(arr, indices[i]) : get(current, indices[i]);
+        current = (i == 0) ? get(arr, indexType, indices[i])
+                           : get(current, indices[i]);
         if (!current) return nullptr;
     }
     return current;
 }
 
-ConstantGEP* ConstantGEP::get(ConstantArray* arr,
+ConstantGEP* ConstantGEP::get(ConstantArray* arr, Type* indexType,
                               const std::vector<ConstantInt*>& indices) {
-    if (!arr) return nullptr;
-    ConstantGEP* current = nullptr;
+    if (!arr || !indexType) return nullptr;
+    if (indices.empty()) return nullptr;
+    size_t flatIndex = 0;
+    Type* currentType = indexType;
+    Type* baseType = arr->getType()->getBaseElementType();
+
     for (size_t i = 0; i < indices.size(); ++i) {
         if (!indices[i]) return nullptr;
         int32_t idx = indices[i]->getSignedValue();
         if (idx < 0) return nullptr;
-        current = (i == 0) ? get(arr, static_cast<size_t>(idx))
-                           : get(current, static_cast<size_t>(idx));
-        if (!current) return nullptr;
+
+        if (auto* arrayType = dyn_cast<ArrayType>(currentType)) {
+            Type* elementType = arrayType->getElementType();
+            size_t elementStride =
+                elementType->getSizeInBytes() / baseType->getSizeInBytes();
+            flatIndex += idx * elementStride;
+
+            currentType = elementType;
+        } else {
+            if (i != indices.size() - 1) return nullptr;
+            flatIndex += idx;
+        }
     }
-    return current;
+
+#ifdef A_OUT_DEBUG
+    size_t totalElements = arr->getNumElements();
+    if (flatIndex >= totalElements) {
+        throw std::runtime_error("ConstantGEP: index " +
+                                 std::to_string(flatIndex) +
+                                 " out of bounds for array of size " +
+                                 std::to_string(totalElements));
+    }
+#endif
+
+    auto* elemPtrTy = PointerType::get(baseType);
+    return new ConstantGEP(elemPtrTy, arr, currentType, flatIndex);
 }
 
 ConstantGEP* ConstantGEP::get(ConstantGEP* base,

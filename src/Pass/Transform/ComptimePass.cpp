@@ -1,6 +1,7 @@
 #include "Pass/Transform/ComptimePass.h"
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <queue>
 
@@ -77,10 +78,59 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
     return changed;
 }
 
+static ConstantArray* flattenConstantArray(ConstantArray* nestedArray) {
+    if (!nestedArray) return nullptr;
+
+    Type* arrayType = nestedArray->getType();
+    Type* baseType = arrayType->getBaseElementType();
+    size_t totalElements =
+        arrayType->getSizeInBytes() / baseType->getSizeInBytes();
+
+    std::vector<Constant*> flatElements;
+    flatElements.reserve(totalElements);
+
+    std::function<void(Constant*)> flatten = [&](Constant* c) {
+        if (auto* innerArray = dyn_cast<ConstantArray>(c)) {
+            for (size_t i = 0; i < innerArray->getNumElements(); ++i) {
+                flatten(innerArray->getElement(i));
+            }
+        } else {
+            flatElements.push_back(c);
+        }
+    };
+
+    flatten(nestedArray);
+
+    auto* flatArrayType = ArrayType::get(baseType, totalElements);
+    return ConstantArray::get(flatArrayType, flatElements);
+}
+
+static Constant* unflattenConstantArray(ConstantArray* flatArray,
+                                        Type* targetType, size_t& index) {
+    if (auto* arrayType = dyn_cast<ArrayType>(targetType)) {
+        std::vector<Constant*> elements;
+        for (size_t i = 0; i < arrayType->getNumElements(); ++i) {
+            elements.push_back(unflattenConstantArray(
+                flatArray, arrayType->getElementType(), index));
+        }
+        return ConstantArray::get(arrayType, elements);
+    } else {
+        if (index < flatArray->getNumElements()) {
+            return flatArray->getElement(index++);
+        }
+        return nullptr;
+    }
+}
+
 void ComptimePass::initializeGlobalValueMap(Module& module) {
     for (auto* gv : module.globals()) {
         if (gv->hasInitializer()) {
-            globalValueMap[gv] = gv->getInitializer();
+            auto* initializer = gv->getInitializer();
+            if (auto* constArray = dyn_cast<ConstantArray>(initializer)) {
+                globalValueMap[gv] = flattenConstantArray(constArray);
+            } else {
+                globalValueMap[gv] = initializer;
+            }
         } else {
             Type* valueType = gv->getValueType();
             globalValueMap[gv] = createZeroInitializedConstant(valueType);
@@ -641,7 +691,8 @@ Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
 
     ConstantGEP* resultGEP = nullptr;
     if (auto* baseArr = dyn_cast<ConstantArray>(baseVal)) {
-        resultGEP = ConstantGEP::get(baseArr, ciIndices);
+        Type* indexType = gep->getSourceElementType();
+        resultGEP = ConstantGEP::get(baseArr, indexType, ciIndices);
     }
     if (auto* baseGep = dyn_cast<ConstantGEP>(baseVal)) {
         resultGEP = ConstantGEP::get(baseGep, ciIndices);
@@ -771,7 +822,20 @@ void ComptimePass::initializeValues(Module& module) {
     // Initialize global values
     for (auto* gv : module.globals()) {
         if (globalValueMap.count(gv)) {
-            gv->setInitializer(globalValueMap[gv]);
+            auto* value = globalValueMap[gv];
+            if (auto* flatArray = dyn_cast<ConstantArray>(value)) {
+                Type* originalType = gv->getValueType();
+                if (originalType->isArrayType()) {
+                    size_t index = 0;
+                    auto* nestedArray =
+                        unflattenConstantArray(flatArray, originalType, index);
+                    gv->setInitializer(nestedArray);
+                } else {
+                    gv->setInitializer(value);
+                }
+            } else {
+                gv->setInitializer(value);
+            }
         }
     }
 
@@ -904,12 +968,25 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
 
 Constant* ComptimePass::createZeroInitializedConstant(Type* type) {
     if (auto* arrayType = dyn_cast<ArrayType>(type)) {
+        Type* baseElemType = arrayType->getBaseElementType();
+        size_t totalElements =
+            arrayType->getSizeInBytes() / baseElemType->getSizeInBytes();
+
         std::vector<Constant*> elements;
-        for (size_t i = 0; i < arrayType->getNumElements(); ++i) {
-            elements.push_back(
-                createZeroInitializedConstant(arrayType->getElementType()));
+        elements.reserve(totalElements);
+
+        for (size_t i = 0; i < totalElements; ++i) {
+            if (auto* intType = dyn_cast<IntegerType>(baseElemType)) {
+                elements.push_back(ConstantInt::get(intType, 0));
+            } else if (auto* floatType = dyn_cast<FloatType>(baseElemType)) {
+                elements.push_back(ConstantFP::get(floatType, 0.0f));
+            } else {
+                elements.push_back(nullptr);
+            }
         }
-        return ConstantArray::get(arrayType, elements);
+
+        auto* flatArrayType = ArrayType::get(baseElemType, totalElements);
+        return ConstantArray::get(flatArrayType, elements);
     } else if (auto* intType = dyn_cast<IntegerType>(type)) {
         return ConstantInt::get(intType, 0);
     } else if (auto* floatType = dyn_cast<FloatType>(type)) {
@@ -923,7 +1000,12 @@ int ComptimePass::countNonZeroElements(Constant* constant) {
     if (auto* constArray = dyn_cast<ConstantArray>(constant)) {
         int count = 0;
         for (size_t i = 0; i < constArray->getNumElements(); ++i) {
-            count += countNonZeroElements(constArray->getElement(i));
+            auto* elem = constArray->getElement(i);
+            if (auto* constInt = dyn_cast<ConstantInt>(elem)) {
+                count += (constInt->getValue() != 0) ? 1 : 0;
+            } else if (auto* constFP = dyn_cast<ConstantFP>(elem)) {
+                count += (constFP->getValue() != 0.0f) ? 1 : 0;
+            }
         }
         return count;
     } else if (auto* constInt = dyn_cast<ConstantInt>(constant)) {
@@ -935,9 +1017,8 @@ int ComptimePass::countNonZeroElements(Constant* constant) {
 }
 
 int ComptimePass::getTotalElements(Constant* constant) {
-    if (auto* type = dyn_cast<ArrayType>(constant->getType())) {
-        return type->getSizeInBytes() /
-               type->getBaseElementType()->getSizeInBytes();
+    if (auto* constArray = dyn_cast<ConstantArray>(constant)) {
+        return constArray->getNumElements();
     }
     return 1;
 }
@@ -945,12 +1026,19 @@ int ComptimePass::getTotalElements(Constant* constant) {
 void ComptimePass::collectFlatIndices(
     Constant* constant, std::vector<std::pair<int, Constant*>>& indices,
     bool onlyNonZero, int baseIndex) {
-    if (isa<ArrayType>(constant->getType())) {
-        auto* constArray = dyn_cast<ConstantArray>(constant);
-        int subSize = getTotalElements(constArray->getElement(0));
+    if (auto* constArray = dyn_cast<ConstantArray>(constant)) {
         for (size_t i = 0; i < constArray->getNumElements(); ++i) {
-            collectFlatIndices(constArray->getElement(i), indices, onlyNonZero,
-                               baseIndex + i * subSize);
+            auto* elem = constArray->getElement(i);
+            bool isZero = false;
+            if (auto* constInt = dyn_cast<ConstantInt>(elem)) {
+                isZero = (constInt->getValue() == 0);
+            } else if (auto* constFP = dyn_cast<ConstantFP>(elem)) {
+                isZero = (constFP->getValue() == 0.0f);
+            }
+
+            if (!onlyNonZero || !isZero) {
+                indices.push_back({baseIndex + i, elem});
+            }
         }
     } else {
         bool isZero = false;

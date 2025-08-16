@@ -2192,3 +2192,65 @@ exit:
 
 )");
 }
+
+// Test 22
+TEST_F(ComptimeTest, ConstantGEPMultiType) {
+    auto intType = ctx->getIntegerType(32);
+    auto arrayType = ArrayType::get(ArrayType::get(intType, 3), 4);
+    auto flattenArrayType = ArrayType::get(intType, 12);
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entryBB);
+
+    // Create array and initialize with compile-time values
+    auto array = builder->createAlloca(arrayType, nullptr, "array");
+    auto gep = builder->createGEP(arrayType, array,
+                                  {builder->getInt32(2), builder->getInt32(1)});
+    builder->createStore(builder->getInt32(123), gep);
+
+    auto flattenGEP = builder->createGEP(flattenArrayType, array,
+                                         {builder->getInt32(2 * 3 + 1)});
+
+    auto res = builder->createLoad(flattenGEP, "flatten_load");
+
+    builder->createRet(res);
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @main() {
+entry:
+  %array = alloca [4 x [3 x i32]]
+  %0 = getelementptr [4 x [3 x i32]], [4 x [3 x i32]]* %array, i32 2, i32 1
+  store i32 123, i32* %0
+  %1 = getelementptr [12 x i32], [4 x [3 x i32]]* %array, i32 7
+  %flatten_load = load i32, i32* %1
+  ret i32 %flatten_load
+}
+)");
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @main() {
+entry:
+  %array = alloca [4 x [3 x i32]]
+  br label %comptime.array.cond.0
+comptime.array.cond.0:
+  %comptime.array.i.0 = phi i32 [ 0, %entry ], [ %0, %comptime.array.body.0 ]
+  %1 = icmp slt i32 %comptime.array.i.0, 12
+  br i1 %1, label %comptime.array.body.0, label %entry.split
+comptime.array.body.0:
+  %2 = getelementptr [12 x i32], [4 x [3 x i32]]* %array, i32 %comptime.array.i.0
+  store i32 0, i32* %2
+  %0 = add i32 %comptime.array.i.0, 1
+  br label %comptime.array.cond.0
+entry.split:
+  %3 = getelementptr [12 x i32], [4 x [3 x i32]]* %array, i32 7
+  store i32 123, i32* %3
+  %4 = getelementptr [4 x [3 x i32]], [4 x [3 x i32]]* %array, i32 2, i32 1
+  %5 = getelementptr [12 x i32], [4 x [3 x i32]]* %array, i32 7
+  ret i32 123
+}
+)");
+}
