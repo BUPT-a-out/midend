@@ -4,6 +4,14 @@
 #include <iostream>
 #include <queue>
 
+// Debug output macro - only outputs when A_OUT_DEBUG is defined
+#ifdef A_OUT_DEBUG
+#define DEBUG_OUT() std::cerr
+#else
+#define DEBUG_OUT() \
+    if constexpr (false) std::cerr
+#endif
+
 #include "IR/BasicBlock.h"
 #include "IR/Constant.h"
 #include "IR/Function.h"
@@ -47,8 +55,8 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
             if (auto* inst = dyn_cast<Instruction>(val)) {
                 if (!runtimeValues.count(inst)) {
                     comptimeInsts.insert(inst);
-                    std::cerr << "[DEBUG] Added to compile-time: "
-                              << IRPrinter::toString(inst);
+                    DEBUG_OUT() << "[DEBUG] Added to compile-time: "
+                                << IRPrinter::toString(inst);
                 }
             }
         }
@@ -143,10 +151,10 @@ Value* ComptimePass::evaluateFunction(Function* func,
             break;
         }
     }
-    std::cout << "[DEBUG] Function " << func->getName()
-              << " evaluated with return value: "
-              << (returnValue ? IRPrinter::toString(returnValue) : "nullptr")
-              << std::endl;
+    DEBUG_OUT() << "[DEBUG] Function " << func->getName()
+                << " evaluated with return value: "
+                << (returnValue ? IRPrinter::toString(returnValue) : "nullptr")
+                << std::endl;
 
     return returnValue;
 }
@@ -169,15 +177,16 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
         // In computation mode, check if instruction should be processed
         if (!isPropagation && !comptimeSet->count(inst)) {
             if (isa<CallInst>(inst) || isa<StoreInst>(inst)) {
-                std::cerr
+                DEBUG_OUT()
                     << "[DEBUG Compute] Skipping non-comptime instruction: "
                     << IRPrinter::toString(inst) << std::endl;
                 skipSideEffect = true;
             }
         }
 
-        std::cerr << (isPropagation ? "[DEBUG Propagate] " : "[DEBUG Compute] ")
-                  << "Evaluating instruction: " << IRPrinter::toString(inst);
+        DEBUG_OUT() << (isPropagation ? "[DEBUG Propagate] "
+                                      : "[DEBUG Compute] ")
+                    << "Evaluating instruction: " << IRPrinter::toString(inst);
 
         Value* result = nullptr;
 
@@ -205,8 +214,8 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                 "Unknown instruction type in block evaluation: " +
                 IRPrinter::toString(inst));
         }
-        std::cout << "\t= (" << result << ") " << IRPrinter::toString(result)
-                  << std::endl;
+        DEBUG_OUT() << "\t= (" << result << ") " << IRPrinter::toString(result)
+                    << std::endl;
 
         updateValueMap(inst, result, valueMap);
     }
@@ -223,8 +232,8 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
     if (result) {
         if (valueMap.count(key)) {
             if (valueMap[key] != result) {
-                std::cerr << "[DEBUG] Value changed for " << key->getName()
-                          << ", marking as runtime" << std::endl;
+                DEBUG_OUT() << "[DEBUG] Value changed for " << key->getName()
+                            << ", marking as runtime" << std::endl;
                 markAsRuntime(key, valueMap);
                 runtime = true;
             }
@@ -650,8 +659,8 @@ Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
 
     if (!func || func->isDeclaration()) {
         if (isMainFunction) {
-            std::cout << "Invalidating arrays from call: " << call->getName()
-                      << std::endl;
+            DEBUG_OUT() << "Invalidating arrays from call: " << call->getName()
+                        << std::endl;
             invalidateArraysFromCall(call, valueMap);
         }
         return nullptr;
@@ -671,8 +680,8 @@ Value* ComptimePass::evaluateCallInst(CallInst* call, ValueMap& valueMap,
     if (!allArgsCompileTime) {
         // Non-compile-time call
         if (isMainFunction) {
-            std::cout << "Invalidating arrays from call: " << call->getName()
-                      << std::endl;
+            DEBUG_OUT() << "Invalidating arrays from call: " << call->getName()
+                        << std::endl;
             invalidateArraysFromCall(call, valueMap);
         }
         return nullptr;
@@ -714,7 +723,7 @@ Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
     return nullptr;
 }
 
-size_t ComptimePass::eliminateComputedInstructions(Function* func) {
+size_t ComptimePass::eliminateComputedInstructions(Function*) {
     std::vector<Instruction*> toRemove;
 
     // Collect instructions to remove - must be compile-time and not runtime
@@ -724,8 +733,8 @@ size_t ComptimePass::eliminateComputedInstructions(Function* func) {
         if (auto inst = dyn_cast<Instruction>(value)) {
             if (isa<GetElementPtrInst>(inst) || isa<AllocaInst>(inst) ||
                 isa<BranchInst>(inst)) {
-                std::cerr << "[DEBUG] Skipping Inst: "
-                          << IRPrinter::toString(inst);
+                DEBUG_OUT()
+                    << "[DEBUG] Skipping Inst: " << IRPrinter::toString(inst);
                 continue;
             }
 
@@ -733,14 +742,14 @@ size_t ComptimePass::eliminateComputedInstructions(Function* func) {
             if (isa<ConstantArray>(computedValue) &&
                 !(isa<ConstantInt>(computedValue) ||
                   isa<ConstantFP>(computedValue))) {
-                std::cerr << "[DEBUG] Skipping ConstantArray value: "
-                          << inst->getName() << " = "
-                          << IRPrinter::toString(computedValue) << std::endl;
+                DEBUG_OUT() << "[DEBUG] Skipping ConstantArray value: "
+                            << inst->getName() << " = "
+                            << IRPrinter::toString(computedValue) << std::endl;
                 continue;
             }
 
-            std::cout << "[DEBUG] Eliminating Inst: "
-                      << IRPrinter::toString(inst);
+            DEBUG_OUT() << "[DEBUG] Eliminating Inst: "
+                        << IRPrinter::toString(inst);
 
             toRemove.push_back(inst);
         }
@@ -766,29 +775,38 @@ void ComptimePass::initializeValues(Module& module) {
         }
     }
 
-    // TODO: init local non-array values
-
     // Initialize local arrays in main function
     Function* mainFunc = module.getFunction("main");
     if (!mainFunc) return;
     BasicBlock* entryBlock = &mainFunc->getEntryBlock();
-    std::vector<std::pair<AllocaInst*, ConstantArray*>> localArrays;
+    std::vector<std::pair<AllocaInst*, Value*>> localValues;
 
     // Find local arrays that need initialization
     for (auto* inst : *entryBlock) {
         if (auto* alloca = dyn_cast<AllocaInst>(inst)) {
             if (globalValueMap.count(alloca)) {
-                if (auto* arrayVal =
-                        dyn_cast<ConstantArray>(globalValueMap[alloca])) {
-                    localArrays.push_back({alloca, arrayVal});
-                }
+                localValues.push_back({alloca, globalValueMap[alloca]});
             }
         }
     }
-    std::reverse(localArrays.begin(), localArrays.end());
+    std::reverse(localValues.begin(), localValues.end());
 
-    for (auto& [alloca, arrayVal] : localArrays) {
-        initializeLocalArray(mainFunc, alloca, arrayVal);
+    for (auto& [alloca, value] : localValues) {
+        if (auto* arrayValue = dyn_cast<ConstantArray>(value)) {
+            initializeLocalArray(mainFunc, alloca, arrayValue);
+        } else {
+            IRBuilder builder(mainFunc->getContext());
+            BasicBlock* entryBlock = &mainFunc->getEntryBlock();
+
+            BasicBlock::iterator insertPoint = entryBlock->begin();
+            while (insertPoint != entryBlock->end() &&
+                   isa<AllocaInst>(*insertPoint)) {
+                ++insertPoint;
+            }
+
+            builder.setInsertPoint(*insertPoint);
+            builder.createStore(value, alloca);
+        }
     }
 }
 
@@ -962,7 +980,7 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
     // TODO: Ensure that the startBlock can also be propagated to (if some
     // blocks loop back to startBlock)
 
-    std::cout
+    DEBUG_OUT()
         << "[DEBUG RuntimePropagation] Performing runtime propagation from "
         << startBlock->getName() << " to " << endBlock->getName() << std::endl;
     // BFS from all successors of startBlock to endBlock (exclusive)
@@ -987,15 +1005,16 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
                 // Mark store target as runtime
                 Value* ptr = store->getPointerOperand();
                 markAsRuntime(ptr, valueMap);
-                std::cout << "[DEBUG RuntimePropagation] Marking store target "
-                             "as runtime: "
-                          << IRPrinter::toString(ptr) << std::endl;
+                DEBUG_OUT()
+                    << "[DEBUG RuntimePropagation] Marking store target "
+                       "as runtime: "
+                    << IRPrinter::toString(ptr) << std::endl;
             } else if (auto* call = dyn_cast<CallInst>(inst)) {
                 // Treat as runtime call - invalidate arrays
                 invalidateArraysFromCall(call, valueMap);
-                std::cout << "[DEBUG RuntimePropagation] Invalidating arrays "
-                             "from call: "
-                          << IRPrinter::toString(call) << std::endl;
+                DEBUG_OUT() << "[DEBUG RuntimePropagation] Invalidating arrays "
+                               "from call: "
+                            << IRPrinter::toString(call) << std::endl;
             }
         }
 

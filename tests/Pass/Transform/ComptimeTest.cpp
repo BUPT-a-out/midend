@@ -1382,14 +1382,42 @@ TEST_F(ComptimeTest, MixedComptimeRuntimeLifecycle) {
         builder->createAdd(phi, builder->getInt32(20), "final_comptime");
     builder->createRet(finalComptime);
 
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @main() {
+entry:
+  %comptime_add = add i32 5, 3
+  %comptime_cond = icmp eq i32 %comptime_add, 8
+  br i1 %comptime_cond, label %comptime_path, label %runtime_path
+comptime_path:
+  %comptime_result = mul i32 10, 4
+  br label %merge
+runtime_path:
+  %0 = call i32 @runtimeFunc()
+  %runtime_result = add i32 %0, 100
+  br label %merge
+merge:
+  %merged_value = phi i32 [ %comptime_result, %comptime_path ], [ %runtime_result, %runtime_path ]
+  %final_comptime = add i32 %merged_value, 20
+  ret i32 %final_comptime
+}
+)");
+
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
 
-    // After pass - should eliminate runtime path and compute final result: 40 +
-    // 20 = 60
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("ret i32 60") != std::string::npos);
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @main() {
+entry:
+  br i1 1, label %comptime_path, label %runtime_path
+comptime_path:
+  br label %merge
+runtime_path:
+  %0 = call i32 @runtimeFunc()
+  %runtime_result = add i32 %0, 100
+  br label %merge
+merge:
+  ret i32 60
+}
+)");
 }
 
 // Test 16: Complex multidimensional global arrays
@@ -1449,13 +1477,41 @@ TEST_F(ComptimeTest, ComplexMultidimensionalGlobalArrays) {
 
     builder->createRet(final);
 
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+@global_4d = internal global [2 x [3 x [2 x [2 x i32]]]] [[3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]]], [3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]]]]
+
+define i32 @main() {
+entry:
+  %0 = getelementptr [2 x [3 x [2 x [2 x i32]]]], [2 x [3 x [2 x [2 x i32]]]]* @global_4d, i32 1, i32 2, i32 1, i32 0
+  store i32 42, i32* %0
+  %1 = getelementptr [2 x [3 x [2 x [2 x i32]]]], [2 x [3 x [2 x [2 x i32]]]]* @global_4d, i32 0, i32 1, i32 0, i32 1
+  store i32 77, i32* %1
+  %load1 = load i32, i32* %0
+  %load2 = load i32, i32* %1
+  %sum = add i32 %load1, %load2
+  %final = mul i32 %sum, 2
+  ret i32 %final
+}
+
+)");
+
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
 
-    // Should compute: (42 + 77) * 2 = 238
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("ret i32 238") != std::string::npos);
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+@global_4d = internal global [2 x [3 x [2 x [2 x i32]]]] [[3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [i32 0, i32 77], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]]], [3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [i32 42, ...]]]]
+
+define i32 @main() {
+entry:
+  %0 = getelementptr [2 x [3 x [2 x [2 x i32]]]], [2 x [3 x [2 x [2 x i32]]]]* @global_4d, i32 1, i32 2, i32 1, i32 0
+  %1 = getelementptr [2 x [3 x [2 x [2 x i32]]]], [2 x [3 x [2 x [2 x i32]]]]* @global_4d, i32 0, i32 1, i32 0, i32 1
+  ret i32 238
+}
+
+)");
 }
 
 // Test 17: Local variable promotion with complex control flow
@@ -1518,16 +1574,73 @@ TEST_F(ComptimeTest, LocalVariablePromotionComplexControlFlow) {
     auto finalLoad = builder->createLoad(localVar, "final_load");
     builder->createRet(finalLoad);
 
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %local_var = alloca i32
+  store i32 10, i32* %local_var
+  br label %loop_header
+loop_header:
+  %loop_i = phi i32 [ 0, %entry ], [ %next_i, %loop_latch ]
+  %loop_cond = icmp slt i32 %loop_i, 3
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %current_val = load i32, i32* %local_var
+  %mod = srem i32 %loop_i, 2
+  %is_even = icmp eq i32 %mod, 0
+  br i1 %is_even, label %if_then, label %if_else
+if_then:
+  %doubled = mul i32 %current_val, 2
+  store i32 %doubled, i32* %local_var
+  br label %loop_latch
+if_else:
+  %added = add i32 %current_val, 5
+  store i32 %added, i32* %local_var
+  br label %loop_latch
+loop_latch:
+  %next_i = add i32 %loop_i, 1
+  br label %loop_header
+exit:
+  %final_load = load i32, i32* %local_var
+  ret i32 %final_load
+}
+
+)");
+
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
 
-    // Should unroll loop and compute final value
-    // i=0 (even): 10 * 2 = 20
-    // i=1 (odd): 20 + 5 = 25
-    // i=2 (even): 25 * 2 = 50
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("ret i32 50") != std::string::npos);
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %local_var = alloca i32
+  store i32 50, i32* %local_var
+  br label %loop_header
+loop_header:
+  %loop_i = phi i32 [ 0, %entry ], [ %next_i, %loop_latch ]
+  %loop_cond = icmp slt i32 %loop_i, 3
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %current_val = load i32, i32* %local_var
+  %mod = srem i32 %loop_i, 2
+  %is_even = icmp eq i32 %mod, 0
+  br i1 %is_even, label %if_then, label %if_else
+if_then:
+  %doubled = mul i32 %current_val, 2
+  br label %loop_latch
+if_else:
+  br label %loop_latch
+loop_latch:
+  %next_i = add i32 %loop_i, 1
+  br label %loop_header
+exit:
+  ret i32 50
+}
+
+)");
 }
 
 // Test 18: Function calls with mixed compile-time and runtime arguments
@@ -1567,15 +1680,55 @@ TEST_F(ComptimeTest, FunctionCallsMixedComptimeRuntimeArgs) {
     auto sum = builder->createAdd(call1, call2, "sum");
     builder->createRet(sum);
 
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @compute(i32 %arg0, i32 %arg1) {
+entry:
+  %a_squared = mul i32 %arg0, %arg0
+  %result = add i32 %a_squared, %arg1
+  ret i32 %result
+}
+
+define i32 @main() {
+entry:
+  %0 = call i32 @runtimeFunc()
+  %call1 = call i32 @compute(i32 5, i32 10)
+  %call2 = call i32 @compute(i32 5, i32 %0)
+  %sum = add i32 %call1, %call2
+  ret i32 %sum
+}
+
+define i32 @runtimeFunc()
+
+)");
+
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
 
     // call1 should be optimized to: 5*5 + 10 = 35
     // call2 should partially optimize: 25 + runtime_value
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("add i32 35") != std::string::npos ||
-                resultIR.find("add i32 25") != std::string::npos);
+    EXPECT_EQ(IRPrinter().print(module),
+              R"(; ModuleID = 'test_module'
+
+define i32 @compute(i32 %arg0, i32 %arg1) {
+entry:
+  %a_squared = mul i32 %arg0, %arg0
+  %result = add i32 %a_squared, %arg1
+  ret i32 %result
+}
+
+define i32 @main() {
+entry:
+  %0 = call i32 @runtimeFunc()
+  %call2 = call i32 @compute(i32 5, i32 %0)
+  %sum = add i32 35, %call2
+  ret i32 %sum
+}
+
+define i32 @runtimeFunc()
+
+)");
 }
 
 // Test 19: Array operations with runtime indices mixed with compile-time
@@ -1613,16 +1766,80 @@ TEST_F(ComptimeTest, ArrayOperationsRuntimeIndicesWithComptime) {
 
     builder->createRet(final);
 
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %array = alloca [10 x i32]
+  %0 = getelementptr [10 x i32], [10 x i32]* %array, i32 0
+  store i32 0, i32* %0
+  %1 = getelementptr [10 x i32], [10 x i32]* %array, i32 1
+  store i32 1, i32* %1
+  %2 = getelementptr [10 x i32], [10 x i32]* %array, i32 2
+  store i32 4, i32* %2
+  %3 = getelementptr [10 x i32], [10 x i32]* %array, i32 3
+  store i32 9, i32* %3
+  %4 = getelementptr [10 x i32], [10 x i32]* %array, i32 4
+  store i32 16, i32* %4
+  %5 = call i32 @runtimeFunc()
+  %6 = getelementptr [10 x i32], [10 x i32]* %array, i32 3
+  %comptime_load = load i32, i32* %6
+  %7 = getelementptr [10 x i32], [10 x i32]* %array, i32 %5
+  %runtime_load = load i32, i32* %7
+  %combined = add i32 %comptime_load, %runtime_load
+  %final = mul i32 %combined, 2
+  ret i32 %final
+}
+
+define i32 @runtimeFunc()
+
+)");
+
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
 
-    // Compile-time load should be optimized (array[3] = 9)
-    // Runtime access should remain
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("add i32 9") != std::string::npos);
-    EXPECT_TRUE(resultIR.find("load i32") !=
-                std::string::npos);  // Runtime load should remain
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %array = alloca [10 x i32]
+  br label %comptime.array.cond.0
+comptime.array.cond.0:
+  %comptime.array.i.0 = phi i32 [ 0, %entry ], [ %0, %comptime.array.body.0 ]
+  %1 = icmp slt i32 %comptime.array.i.0, 10
+  br i1 %1, label %comptime.array.body.0, label %entry.split
+comptime.array.body.0:
+  %2 = getelementptr [10 x i32], [10 x i32]* %array, i32 %comptime.array.i.0
+  store i32 0, i32* %2
+  %0 = add i32 %comptime.array.i.0, 1
+  br label %comptime.array.cond.0
+entry.split:
+  %3 = getelementptr [10 x i32], [10 x i32]* %array, i32 1
+  store i32 1, i32* %3
+  %4 = getelementptr [10 x i32], [10 x i32]* %array, i32 2
+  store i32 4, i32* %4
+  %5 = getelementptr [10 x i32], [10 x i32]* %array, i32 3
+  store i32 9, i32* %5
+  %6 = getelementptr [10 x i32], [10 x i32]* %array, i32 4
+  store i32 16, i32* %6
+  %7 = getelementptr [10 x i32], [10 x i32]* %array, i32 0
+  %8 = getelementptr [10 x i32], [10 x i32]* %array, i32 1
+  %9 = getelementptr [10 x i32], [10 x i32]* %array, i32 2
+  %10 = getelementptr [10 x i32], [10 x i32]* %array, i32 3
+  %11 = getelementptr [10 x i32], [10 x i32]* %array, i32 4
+  %12 = call i32 @runtimeFunc()
+  %13 = getelementptr [10 x i32], [10 x i32]* %array, i32 3
+  %14 = getelementptr [10 x i32], [10 x i32]* %array, i32 %12
+  %runtime_load = load i32, i32* %14
+  %combined = add i32 9, %runtime_load
+  %final = mul i32 %combined, 2
+  ret i32 %final
+}
+
+define i32 @runtimeFunc()
+
+)");
 }
 
 // Test 20: Nested function calls with compile-time propagation
@@ -1673,68 +1890,72 @@ TEST_F(ComptimeTest, NestedFunctionCallsComptimePropagation) {
 
     builder->createRet(final);
 
-    ComptimePass pass;
-    bool changed = pass.runOnModule(*module, *am);
-    EXPECT_TRUE(changed);
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
 
-    // Should compute: combine(4, 6) = square(4) + add_ten(6) = 16 + 16 = 32
-    // Final: 32 * 2 = 64
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("ret i32 64") != std::string::npos);
+define i32 @square(i32 %arg0) {
+entry:
+  %squared = mul i32 %arg0, %arg0
+  ret i32 %squared
 }
 
-// Test 21: Pointer arithmetic with compile-time offsets
-TEST_F(ComptimeTest, PointerArithmeticComptimeOffsets) {
-    auto intType = ctx->getIntegerType(32);
-    auto ptrType = PointerType::get(intType);
-    auto arrayType = ArrayType::get(intType, 20);
-    auto funcType = FunctionType::get(intType, {});
-    auto func = Function::Create(funcType, "main", module.get());
+define i32 @add_ten(i32 %arg0) {
+entry:
+  %add_ten = add i32 %arg0, 10
+  ret i32 %add_ten
+}
 
-    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
-    builder->setInsertPoint(entryBB);
+define i32 @combine(i32 %arg0, i32 %arg1) {
+entry:
+  %square_call = call i32 @square(i32 %arg0)
+  %add_ten_call = call i32 @add_ten(i32 %arg1)
+  %combined = add i32 %square_call, %add_ten_call
+  ret i32 %combined
+}
 
-    // Create array and get base pointer
-    auto array = builder->createAlloca(arrayType, nullptr, "array");
-    auto basePtr = builder->createGEP(arrayType, array, {builder->getInt32(0)});
+define i32 @main() {
+entry:
+  %nested_call = call i32 @combine(i32 4, i32 6)
+  %final = mul i32 %nested_call, 2
+  ret i32 %final
+}
 
-    // Initialize some values
-    auto initGEP5 =
-        builder->createGEP(arrayType, array, {builder->getInt32(5)});
-    builder->createStore(builder->getInt32(100), initGEP5);
-    auto initGEP10 =
-        builder->createGEP(arrayType, array, {builder->getInt32(10)});
-    builder->createStore(builder->getInt32(200), initGEP10);
-
-    // Pointer arithmetic with compile-time offsets
-    auto offset1 = builder->getInt32(5);
-    auto offset2 = builder->getInt32(10);
-
-    auto ptr1 = builder->createGEP(intType, basePtr, {offset1});
-    auto ptr2 = builder->createGEP(intType, basePtr, {offset2});
-
-    auto load1 = builder->createLoad(ptr1, "load1");
-    auto load2 = builder->createLoad(ptr2, "load2");
-
-    // Compute pointer difference (compile-time calculable)
-    auto ptrDiff = builder->createSub(offset2, offset1, "ptr_diff");
-
-    // Final computation
-    auto sum = builder->createAdd(load1, load2, "sum");
-    auto final = builder->createAdd(sum, ptrDiff, "final");
-
-    builder->createRet(final);
+)");
 
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
 
-    // Should compute: 100 + 200 + (10 - 5) = 305
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("ret i32 305") != std::string::npos);
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @square(i32 %arg0) {
+entry:
+  %squared = mul i32 %arg0, %arg0
+  ret i32 %squared
 }
 
-// Test 22: Compile-time loop unrolling with simple counting loop
+define i32 @add_ten(i32 %arg0) {
+entry:
+  %add_ten = add i32 %arg0, 10
+  ret i32 %add_ten
+}
+
+define i32 @combine(i32 %arg0, i32 %arg1) {
+entry:
+  %square_call = call i32 @square(i32 %arg0)
+  %add_ten_call = call i32 @add_ten(i32 %arg1)
+  %combined = add i32 %square_call, %add_ten_call
+  ret i32 %combined
+}
+
+define i32 @main() {
+entry:
+  ret i32 64
+}
+
+)");
+}
+
+// Test 21: Compile-time loop unrolling with simple counting loop
 TEST_F(ComptimeTest, CompileTimeLoopUnrollingSimple) {
     auto intType = ctx->getIntegerType(32);
     auto funcType = FunctionType::get(intType, {});
@@ -1776,16 +1997,61 @@ TEST_F(ComptimeTest, CompileTimeLoopUnrollingSimple) {
     auto finalSum = builder->createLoad(sumVar, "final_sum");
     builder->createRet(finalSum);
 
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %sum = alloca i32
+  store i32 0, i32* %sum
+  br label %loop_header
+loop_header:
+  %loop_i = phi i32 [ 0, %entry ], [ %next_i, %loop_body ]
+  %loop_cond = icmp slt i32 %loop_i, 5
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %current_sum = load i32, i32* %sum
+  %doubled_i = mul i32 %loop_i, 2
+  %new_sum = add i32 %current_sum, %doubled_i
+  store i32 %new_sum, i32* %sum
+  %next_i = add i32 %loop_i, 1
+  br label %loop_header
+exit:
+  %final_sum = load i32, i32* %sum
+  ret i32 %final_sum
+}
+
+)");
+
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
 
     // Should unroll to: 0*2 + 1*2 + 2*2 + 3*2 + 4*2 = 0 + 2 + 4 + 6 + 8 = 20
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("ret i32 20") != std::string::npos);
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %sum = alloca i32
+  store i32 20, i32* %sum
+  br label %loop_header
+loop_header:
+  %loop_i = phi i32 [ 0, %entry ], [ %next_i, %loop_body ]
+  %loop_cond = icmp slt i32 %loop_i, 5
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %current_sum = load i32, i32* %sum
+  %doubled_i = mul i32 %loop_i, 2
+  %new_sum = add i32 %current_sum, %doubled_i
+  %next_i = add i32 %loop_i, 1
+  br label %loop_header
+exit:
+  ret i32 20
 }
 
-// Test 23: Complex loop unrolling with nested conditions
+)");
+}
+
+// Test 22: Complex loop unrolling with nested conditions
 TEST_F(ComptimeTest, ComplexLoopUnrollingWithConditions) {
     auto intType = ctx->getIntegerType(32);
     auto funcType = FunctionType::get(intType, {});
@@ -1848,6 +2114,42 @@ TEST_F(ComptimeTest, ComplexLoopUnrollingWithConditions) {
     auto finalResult = builder->createLoad(resultVar, "final_result");
     builder->createRet(finalResult);
 
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %result = alloca i32
+  store i32 1, i32* %result
+  br label %loop_header
+loop_header:
+  %loop_i = phi i32 [ 1, %entry ], [ %next_i, %loop_latch ]
+  %loop_cond = icmp sle i32 %loop_i, 4
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %mod = srem i32 %loop_i, 2
+  %is_even = icmp eq i32 %mod, 0
+  br i1 %is_even, label %if_even, label %if_odd
+if_even:
+  %current_result1 = load i32, i32* %result
+  %even_result = mul i32 %current_result1, %loop_i
+  store i32 %even_result, i32* %result
+  br label %loop_latch
+if_odd:
+  %current_result2 = load i32, i32* %result
+  %tripled = mul i32 %loop_i, 3
+  %odd_result = add i32 %current_result2, %tripled
+  store i32 %odd_result, i32* %result
+  br label %loop_latch
+loop_latch:
+  %next_i = add i32 %loop_i, 1
+  br label %loop_header
+exit:
+  %final_result = load i32, i32* %result
+  ret i32 %final_result
+}
+
+)");
+
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
     EXPECT_TRUE(changed);
@@ -1857,6 +2159,36 @@ TEST_F(ComptimeTest, ComplexLoopUnrollingWithConditions) {
     // i=2 (even): result = 4 * 2 = 8
     // i=3 (odd): result = 8 + 3*3 = 17
     // i=4 (even): result = 17 * 4 = 68
-    auto resultIR = IRPrinter().print(func);
-    EXPECT_TRUE(resultIR.find("ret i32 68") != std::string::npos);
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+define i32 @main() {
+entry:
+  %result = alloca i32
+  store i32 68, i32* %result
+  br label %loop_header
+loop_header:
+  %loop_i = phi i32 [ 1, %entry ], [ %next_i, %loop_latch ]
+  %loop_cond = icmp sle i32 %loop_i, 4
+  br i1 %loop_cond, label %loop_body, label %exit
+loop_body:
+  %mod = srem i32 %loop_i, 2
+  %is_even = icmp eq i32 %mod, 0
+  br i1 %is_even, label %if_even, label %if_odd
+if_even:
+  %current_result1 = load i32, i32* %result
+  %even_result = mul i32 %current_result1, %loop_i
+  br label %loop_latch
+if_odd:
+  %current_result2 = load i32, i32* %result
+  %tripled = mul i32 %loop_i, 3
+  %odd_result = add i32 %current_result2, %tripled
+  br label %loop_latch
+loop_latch:
+  %next_i = add i32 %loop_i, 1
+  br label %loop_header
+exit:
+  ret i32 68
+}
+
+)");
 }

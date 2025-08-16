@@ -206,7 +206,11 @@ BasicBlock* BasicBlock::split(iterator pos,
     }
 
     for (Instruction* inst : originalSlice) {
-        newBB->push_back(inst->clone());
+        auto newInst = inst->clone();
+        newBB->push_back(newInst);
+        inst->replaceAllUsesWith(newInst);
+    }
+    for (Instruction* inst : originalSlice) {
         erase(inst->getIterator());
     }
     replaceUsesWith<PHINode>(newBB);
