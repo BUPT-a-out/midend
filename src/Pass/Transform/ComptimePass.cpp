@@ -920,6 +920,7 @@ void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
         }
     } else {
         static int array_init_cnt = 0;
+        array_init_cnt++;
         auto oldBB = alloca->getParent();
         BasicBlock* loopCond = BasicBlock::Create(
             mainFunc->getContext(),

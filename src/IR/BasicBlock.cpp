@@ -188,12 +188,14 @@ void BasicBlock::invalidatePredecessorCacheInFunction() const {
 
 BasicBlock* BasicBlock::split(iterator pos,
                               const std::vector<BasicBlock*>& between) {
+    static int split_count = 0;
     Function* fn = getParent();
     if (pos == end() || !fn) return nullptr;
 
     Context* ctx = getContext();
 
-    BasicBlock* newBB = BasicBlock::Create(ctx, getName() + ".split");
+    BasicBlock* newBB = BasicBlock::Create(
+        ctx, getName() + ".split." + std::to_string(++split_count));
 
     std::vector<Instruction*> originalSlice;
     for (auto it = pos; it != end(); ++it) {
