@@ -311,8 +311,6 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
     // First handle PHI nodes
     handlePHINodes(block, prevBlock, valueMap);
 
-    bool isPropagation = (comptimeSet == nullptr);
-
     // Then handle other instructions
     for (auto* inst : *block) {
         if (isa<PHINode>(inst)) continue;
@@ -321,7 +319,7 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
         bool skipSideEffect = false;
 
         // In computation mode, check if instruction should be processed
-        if (!isPropagation && !comptimeSet->count(inst)) {
+        if (comptimeSet && !comptimeSet->count(inst)) {
             if (isa<CallInst>(inst) || isa<StoreInst>(inst)) {
                 DEBUG_OUT()
                     << "[DEBUG Compute] Skipping non-comptime instruction: "
@@ -570,7 +568,16 @@ Value* ComptimePass::evaluateBinaryOp(BinaryOperator* binOp,
                 case Opcode::LOr:
                     return ConstantInt::get(
                         cast<IntegerType>(lhsInt->getType()), l || r);
+                case Opcode::Shl:
+                    return ConstantInt::get(
+                        cast<IntegerType>(lhsInt->getType()), l << r);
+                case Opcode::Shr:
+                    return ConstantInt::get(
+                        cast<IntegerType>(lhsInt->getType()), l >> r);
                 default:
+                    throw std::runtime_error(
+                        "Unsupported opcode: " +
+                        std::to_string(static_cast<int>(op)));
                     break;
             }
         }
@@ -734,8 +741,7 @@ Value* ComptimePass::evaluateLoadInst(LoadInst* load, ValueMap& valueMap) {
 
     auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
 
-    if (localValueMap.count(ptr) &&
-        runtimeValues.find(ptr) == runtimeValues.end()) {
+    if (localValueMap.count(ptr)) {
         Value* v = localValueMap[ptr];
         if (auto* gepConst = dyn_cast<ConstantGEP>(v)) {
             return gepConst->getElement();
@@ -1237,6 +1243,13 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
 
 void ComptimePass::markAsRuntime(Value* value) {
     if (!value) return;
+
+    if (auto gv = dyn_cast<GlobalVariable>(value)) {
+        if (globalValueMap.count(gv)) {
+            gv->setInitializer(globalValueMap[gv]);
+            globalValueMap.erase(gv);
+        }
+    }
 
     runtimeValues.insert(value);
 
