@@ -79,7 +79,7 @@ class ComptimePass : public ModulePass {
     Value* evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
 
     void markAsRuntime(Value* value);
-    void invalidateArraysFromCall(CallInst* call, ValueMap& valueMap);
+    void invalidateValuesFromCall(CallInst* call, ValueMap& valueMap);
 
     bool updateValueMap(Value* inst, Value* result, ValueMap& valueMap);
 

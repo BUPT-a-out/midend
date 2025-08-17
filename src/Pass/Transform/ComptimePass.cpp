@@ -729,7 +729,7 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
         if (isMainFunction) {
             DEBUG_OUT() << "Invalidating arrays from call: " << call->getName()
                         << std::endl;
-            invalidateArraysFromCall(call, valueMap);
+            invalidateValuesFromCall(call, valueMap);
         }
         return std::make_pair(nullptr, false);
     }
@@ -750,7 +750,7 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
         if (isMainFunction) {
             DEBUG_OUT() << "Invalidating arrays from call: " << call->getName()
                         << std::endl;
-            invalidateArraysFromCall(call, valueMap);
+            invalidateValuesFromCall(call, valueMap);
         }
         return std::make_pair(nullptr, false);
     }
@@ -1118,10 +1118,16 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
                     << IRPrinter::toString(ptr) << std::endl;
             } else if (auto* call = dyn_cast<CallInst>(inst)) {
                 // Treat as runtime call - invalidate arrays
-                invalidateArraysFromCall(call, valueMap);
-                DEBUG_OUT() << "[DEBUG RuntimePropagation] Invalidating arrays "
-                               "from call: "
+                invalidateValuesFromCall(call, valueMap);
+                markAsRuntime(call);
+                DEBUG_OUT() << "[DEBUG RuntimePropagation] Invalidating values "
+                               "and function result from call: "
                             << IRPrinter::toString(call) << std::endl;
+            } else {
+                markAsRuntime(inst);
+                DEBUG_OUT() << "[DEBUG RuntimePropagation] Marking instruction "
+                               "as runtime: "
+                            << IRPrinter::toString(inst);
             }
         }
 
@@ -1149,7 +1155,7 @@ void ComptimePass::markAsRuntime(Value* value) {
     }
 }
 
-void ComptimePass::invalidateArraysFromCall(CallInst* call,
+void ComptimePass::invalidateValuesFromCall(CallInst* call,
                                             ValueMap& valueMap) {
     // Invalidate all global variables
     std::vector<Value*> toErase;

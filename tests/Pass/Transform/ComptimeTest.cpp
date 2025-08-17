@@ -2401,3 +2401,98 @@ exit:
 
 )");
 }
+
+TEST_F(ComptimeTest, TranslateACFileWithPhiNodes) {
+    auto intType = ctx->getIntegerType(32);
+
+    // Create global variable g = 3 (from a.c)
+    auto globalG =
+        GlobalVariable::Create(intType, false, GlobalVariable::InternalLinkage,
+                               builder->getInt32(3), "g", module.get());
+
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+
+    // Create basic blocks
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto loopCondBB = BasicBlock::Create(ctx.get(), "loop.cond", func);
+    auto loopBodyBB = BasicBlock::Create(ctx.get(), "loop.body", func);
+    auto loopLatchBB = BasicBlock::Create(ctx.get(), "loop.latch", func);
+    auto exitBB = BasicBlock::Create(ctx.get(), "exit", func);
+
+    // Entry block: initialize i = 0
+    builder->setInsertPoint(entryBB);
+    builder->createBr(loopCondBB);
+
+    // Loop condition: while (i < g)
+    builder->setInsertPoint(loopCondBB);
+    auto phiI = builder->createPHI(intType, "i");
+    phiI->addIncoming(builder->getInt32(0), entryBB);  // i starts at 0
+
+    auto gLoad = builder->createLoad(globalG, "g_load");
+    auto loopCond = builder->createICmpSLT(phiI, gLoad, "loop_cond");
+    builder->createCondBr(loopCond, loopBodyBB, exitBB);
+
+    // Loop body: runtimeFunc(); g = g + 1; i = i + 2;
+    builder->setInsertPoint(loopBodyBB);
+
+    // Call runtimeFunc() using the getRuntimeFunction method
+    auto runtimeFunc = getRuntimeFunction();
+    builder->createCall(runtimeFunc, {});
+
+    // g = g + 1
+    auto gCurrent = builder->createLoad(globalG, "g_current");
+    auto gNext = builder->createAdd(gCurrent, builder->getInt32(1), "g_next");
+    builder->createStore(gNext, globalG);
+
+    builder->createBr(loopLatchBB);
+
+    // Loop latch: i = i + 2
+    builder->setInsertPoint(loopLatchBB);
+    auto iNext = builder->createAdd(phiI, builder->getInt32(2), "i_next");
+    builder->createBr(loopCondBB);
+    phiI->addIncoming(iNext, loopLatchBB);  // Complete phi node
+
+    // Exit: return g
+    builder->setInsertPoint(exitBB);
+    auto gFinal = builder->createLoad(globalG, "g_final");
+    builder->createRet(gFinal);
+
+    auto beforeIR = IRPrinter().print(module);
+
+    EXPECT_EQ(beforeIR, R"(; ModuleID = 'test_module'
+
+@g = internal global i32 3
+
+define i32 @main() {
+entry:
+  br label %loop.cond
+loop.cond:
+  %i = phi i32 [ 0, %entry ], [ %i_next, %loop.latch ]
+  %g_load = load i32, i32* @g
+  %loop_cond = icmp slt i32 %i, %g_load
+  br i1 %loop_cond, label %loop.body, label %exit
+loop.body:
+  %0 = call i32 @runtimeFunc()
+  %g_current = load i32, i32* @g
+  %g_next = add i32 %g_current, 1
+  store i32 %g_next, i32* @g
+  br label %loop.latch
+loop.latch:
+  %i_next = add i32 %i, 2
+  br label %loop.cond
+exit:
+  %g_final = load i32, i32* @g
+  ret i32 %g_final
+}
+
+define i32 @runtimeFunc()
+
+)");
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_FALSE(changed);
+
+    EXPECT_EQ(IRPrinter().print(module), beforeIR);
+}
