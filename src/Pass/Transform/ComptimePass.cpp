@@ -935,24 +935,28 @@ size_t ComptimePass::eliminateComputedInstructions(Function*) {
     return toRemove.size();
 }
 
+void setGlobalInitializer(GlobalVariable* gv, Value* value) {
+    if (auto* flatArray = dyn_cast<ConstantArray>(value)) {
+        Type* originalType = gv->getValueType();
+        if (originalType->isArrayType()) {
+            size_t index = 0;
+            auto* nestedArray =
+                unflattenConstantArray(flatArray, originalType, index);
+            gv->setInitializer(nestedArray);
+        } else {
+            gv->setInitializer(value);
+        }
+    } else {
+        gv->setInitializer(value);
+    }
+}
+
 void ComptimePass::initializeValues(Module& module) {
     // Initialize global values
     for (auto* gv : module.globals()) {
         if (globalValueMap.count(gv)) {
             auto* value = globalValueMap[gv];
-            if (auto* flatArray = dyn_cast<ConstantArray>(value)) {
-                Type* originalType = gv->getValueType();
-                if (originalType->isArrayType()) {
-                    size_t index = 0;
-                    auto* nestedArray =
-                        unflattenConstantArray(flatArray, originalType, index);
-                    gv->setInitializer(nestedArray);
-                } else {
-                    gv->setInitializer(value);
-                }
-            } else {
-                gv->setInitializer(value);
-            }
+            setGlobalInitializer(gv, value);
         }
     }
 
@@ -1246,7 +1250,7 @@ void ComptimePass::markAsRuntime(Value* value) {
 
     if (auto gv = dyn_cast<GlobalVariable>(value)) {
         if (globalValueMap.count(gv)) {
-            gv->setInitializer(globalValueMap[gv]);
+            if (!isPropagation) setGlobalInitializer(gv, globalValueMap[gv]);
             globalValueMap.erase(gv);
         }
     }
