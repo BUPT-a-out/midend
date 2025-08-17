@@ -248,7 +248,10 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
     // Bind function arguments
     for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
         valueMap[func->getArg(i)] = args[i];
+        std::cout << IRPrinter::toString(func->getArg(i)) << " = "
+                  << IRPrinter::toString(args[i]) << ", ";
     }
+    std::cout << std::endl;
 
     BasicBlock* currentBlock = &func->getEntryBlock();
     BasicBlock* prevBlock = nullptr;
@@ -764,7 +767,7 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
         return nullptr;
     }
 
-    if (isa<GlobalVariable>(ptr)) {
+    if (isa<GlobalVariable>(ptr) && globalValueMap.count(ptr)) {
         globalValueMap[ptr] = value;
         DEBUG_OUT() << "\tupdated global value for " << ptr->getName() << " = "
                     << IRPrinter::toString(value) << std::endl;
@@ -1216,6 +1219,8 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
                 // Mark store target as runtime
                 Value* ptr = store->getPointerOperand();
                 markAsRuntime(ptr);
+                valueMap.erase(ptr);
+                globalValueMap.erase(ptr);
                 DEBUG_OUT()
                     << "[DEBUG RuntimePropagation] Marking store target "
                        "as runtime: "
@@ -1223,12 +1228,16 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
             } else if (auto* call = dyn_cast<CallInst>(inst)) {
                 // Treat as runtime call - invalidate arrays
                 invalidateValuesFromCall(call, valueMap);
+                valueMap.erase(inst);
+                globalValueMap.erase(inst);
                 markAsRuntime(call);
                 DEBUG_OUT() << "[DEBUG RuntimePropagation] Invalidating values "
                                "and function result from call: "
                             << IRPrinter::toString(call) << std::endl;
             } else {
                 markAsRuntime(inst);
+                valueMap.erase(inst);
+                globalValueMap.erase(inst);
                 DEBUG_OUT() << "[DEBUG RuntimePropagation] Marking instruction "
                                "as runtime: "
                             << IRPrinter::toString(inst);
