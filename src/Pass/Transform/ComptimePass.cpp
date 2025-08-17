@@ -90,17 +90,53 @@ static ConstantArray* flattenConstantArray(ConstantArray* nestedArray) {
     std::vector<Constant*> flatElements;
     flatElements.reserve(totalElements);
 
-    std::function<void(Constant*)> flatten = [&](Constant* c) {
-        if (auto* innerArray = dyn_cast<ConstantArray>(c)) {
-            for (size_t i = 0; i < innerArray->getNumElements(); ++i) {
-                flatten(innerArray->getElement(i));
-            }
-        } else {
-            flatElements.push_back(c);
+    auto createZero = [&]() -> Constant* {
+        if (auto* intType = dyn_cast<IntegerType>(baseType)) {
+            return ConstantInt::get(intType, 0);
+        } else if (auto* floatType = dyn_cast<FloatType>(baseType)) {
+            return ConstantFP::get(floatType, 0.0f);
         }
+        return nullptr;
     };
+    std::function<void(Constant*, ArrayType*)> flattenWithPadding =
+        [&](Constant* c, ArrayType* expectedType) {
+            if (!c) {
+                size_t numElements =
+                    expectedType->getSizeInBytes() / baseType->getSizeInBytes();
+                for (size_t i = 0; i < numElements; ++i) {
+                    flatElements.push_back(createZero());
+                }
+                return;
+            }
 
-    flatten(nestedArray);
+            if (auto* innerArray = dyn_cast<ConstantArray>(c)) {
+                size_t expectedElements = expectedType->getNumElements();
+                auto* elemType = expectedType->getElementType();
+
+                for (size_t i = 0; i < expectedElements; ++i) {
+                    if (i < innerArray->getNumElements()) {
+                        if (auto* nextArrayType =
+                                dyn_cast<ArrayType>(elemType)) {
+                            flattenWithPadding(innerArray->getElement(i),
+                                               nextArrayType);
+                        } else {
+                            flatElements.push_back(innerArray->getElement(i));
+                        }
+                    } else {
+                        if (auto* nextArrayType =
+                                dyn_cast<ArrayType>(elemType)) {
+                            flattenWithPadding(nullptr, nextArrayType);
+                        } else {
+                            flatElements.push_back(createZero());
+                        }
+                    }
+                }
+            } else {
+                flatElements.push_back(c);
+            }
+        };
+
+    flattenWithPadding(nestedArray, dyn_cast<ArrayType>(arrayType));
 
     auto* flatArrayType = ArrayType::get(baseType, totalElements);
     return ConstantArray::get(flatArrayType, flatElements);
@@ -108,13 +144,71 @@ static ConstantArray* flattenConstantArray(ConstantArray* nestedArray) {
 
 static Constant* unflattenConstantArray(ConstantArray* flatArray,
                                         Type* targetType, size_t& index) {
+    std::function<bool(Constant*)> isZero = [&isZero](Constant* c) -> bool {
+        if (!c) return true;
+        if (auto* intConst = dyn_cast<ConstantInt>(c)) {
+            return intConst->getValue() == 0;
+        } else if (auto* fpConst = dyn_cast<ConstantFP>(c)) {
+            return fpConst->getValue() == 0.0f;
+        } else if (auto* arrayConst = dyn_cast<ConstantArray>(c)) {
+            for (size_t i = 0; i < arrayConst->getNumElements(); ++i) {
+                if (!isZero(arrayConst->getElement(i))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    };
+
+    std::function<Constant*(ArrayType*, const std::vector<Constant*>&)>
+        compactArray =
+            [&isZero, &compactArray](
+                ArrayType* arrayType,
+                const std::vector<Constant*>& elements) -> Constant* {
+        int lastNonZero = -1;
+        for (int i = elements.size() - 1; i >= 0; --i) {
+            if (!isZero(elements[i])) {
+                lastNonZero = i;
+                break;
+            }
+        }
+
+        if (lastNonZero == -1) {
+            std::vector<Constant*> minimal;
+            auto* elemType = arrayType->getElementType();
+            if (auto* innerArrayType = dyn_cast<ArrayType>(elemType)) {
+                minimal.push_back(ConstantArray::get(innerArrayType, {}));
+            }
+            return ConstantArray::get(arrayType, minimal);
+        }
+
+        std::vector<Constant*> compacted(elements.begin(),
+                                         elements.begin() + lastNonZero + 1);
+
+        auto* elemType = arrayType->getElementType();
+        if (auto* innerArrayType = dyn_cast<ArrayType>(elemType)) {
+            for (size_t i = 0; i < compacted.size(); ++i) {
+                if (auto* innerArray = dyn_cast<ConstantArray>(compacted[i])) {
+                    std::vector<Constant*> innerElements;
+                    for (size_t j = 0; j < innerArray->getNumElements(); ++j) {
+                        innerElements.push_back(innerArray->getElement(j));
+                    }
+                    compacted[i] = compactArray(innerArrayType, innerElements);
+                }
+            }
+        }
+
+        return ConstantArray::get(arrayType, compacted);
+    };
+
     if (auto* arrayType = dyn_cast<ArrayType>(targetType)) {
         std::vector<Constant*> elements;
         for (size_t i = 0; i < arrayType->getNumElements(); ++i) {
             elements.push_back(unflattenConstantArray(
                 flatArray, arrayType->getElementType(), index));
         }
-        return ConstantArray::get(arrayType, elements);
+        return compactArray(arrayType, elements);
     } else {
         if (index < flatArray->getNumElements()) {
             return flatArray->getElement(index++);

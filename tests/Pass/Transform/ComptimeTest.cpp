@@ -888,6 +888,83 @@ entry:
 )");
 }
 
+// Test 9.4.1: Global array assignment2
+TEST_F(ComptimeTest, GlobalArrayAssignment2) {
+    auto intType = ctx->getIntegerType(32);
+    auto arrayType = ArrayType::get(ArrayType::get(intType, 2), 2);
+    auto flattenArrayType = ArrayType::get(intType, 4);
+
+    // Create global array with zero initializer
+    auto innerArrayType = ArrayType::get(intType, 2);  // [2 x i32]
+    auto init1 = ConstantArray::get(innerArrayType, {builder->getInt32(1)});
+    auto init2 = ConstantArray::get(innerArrayType, {builder->getInt32(2)});
+    auto init = ConstantArray::get(arrayType, {init1, init2});
+    // global_arr[2][2] = {{1}, {2}} = {1, 0, 2, 0}
+    auto globalArray = GlobalVariable::Create(arrayType, false,
+                                              GlobalVariable::InternalLinkage,
+                                              init, "global_arr", module.get());
+
+    auto funcType = FunctionType::get(intType, {});
+    auto func = Function::Create(funcType, "main", module.get());
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    builder->setInsertPoint(entryBB);
+
+    // ((int*)global_arr)[1] = 3
+    // global_arr = {{1, 3}, {2}} = {1, 3, 2, 0}
+    auto gep = builder->createGEP(flattenArrayType, globalArray,
+                                  {builder->getInt32(1)});
+    builder->createStore(builder->getInt32(3), gep);
+
+    // Load and sum elements: global_arr[1] + global_arr[3]
+    auto gep1 = builder->createGEP(
+        arrayType, globalArray, {builder->getInt32(0), builder->getInt32(1)});
+    auto load1 = builder->createLoad(gep1, "elem1");
+
+    auto gep3 = builder->createGEP(
+        arrayType, globalArray, {builder->getInt32(1), builder->getInt32(0)});
+    auto load3 = builder->createLoad(gep3, "elem3");
+
+    // sum = global_arr[1][0] + global_arr[0][1] = 3 + 2 = 5
+    auto sum = builder->createAdd(load1, load3, "sum");
+    builder->createRet(sum);
+
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+@global_arr = internal global [2 x [2 x i32]] [[2 x i32] [i32 1], [2 x i32] [i32 2]]
+
+define i32 @main() {
+entry:
+  %0 = getelementptr [4 x i32], [2 x [2 x i32]]* @global_arr, i32 1
+  store i32 3, i32* %0
+  %1 = getelementptr [2 x [2 x i32]], [2 x [2 x i32]]* @global_arr, i32 0, i32 1
+  %elem1 = load i32, i32* %1
+  %2 = getelementptr [2 x [2 x i32]], [2 x [2 x i32]]* @global_arr, i32 1, i32 0
+  %elem3 = load i32, i32* %2
+  %sum = add i32 %elem1, %elem3
+  ret i32 %sum
+}
+
+)");
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+@global_arr = internal global [2 x [2 x i32]] [[2 x i32] [i32 1, i32 3], [2 x i32] [i32 2]]
+
+define i32 @main() {
+entry:
+  %0 = getelementptr [4 x i32], [2 x [2 x i32]]* @global_arr, i32 1
+  %1 = getelementptr [2 x [2 x i32]], [2 x [2 x i32]]* @global_arr, i32 0, i32 1
+  %2 = getelementptr [2 x [2 x i32]], [2 x [2 x i32]]* @global_arr, i32 1, i32 0
+  ret i32 5
+}
+
+)");
+}
+
 // TODO: 多维全局数组
 
 // Test 9.5: Array as function parameter with assignment
@@ -1502,7 +1579,7 @@ entry:
 
     EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
 
-@global_4d = internal global [2 x [3 x [2 x [2 x i32]]]] [[3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [i32 0, i32 77], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]]], [3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [...]], [2 x [2 x i32]] [[2 x i32] [...], [2 x i32] [i32 42, ...]]]]
+@global_4d = internal global [2 x [3 x [2 x [2 x i32]]]] [[3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] []], [2 x [2 x i32]] [[2 x i32] [i32 0, i32 77]]], [3 x [2 x [2 x i32]]] [[2 x [2 x i32]] [[2 x i32] []], [2 x [2 x i32]] [[2 x i32] []], [2 x [2 x i32]] [[2 x i32] [], [2 x i32] [i32 42]]]]
 
 define i32 @main() {
 entry:
