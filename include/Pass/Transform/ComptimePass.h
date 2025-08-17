@@ -56,9 +56,10 @@ class ComptimePass : public ModulePass {
     // Unified evaluation function - pass ComptimeSet as nullptr for propagation
     std::pair<Value*, bool> evaluateFunction(
         Function* func, const std::vector<Value*>& args, bool isMainFunction,
-        const ComptimeSet* comptimeSet = nullptr);
+        const ComptimeSet* comptimeSet, ValueMap& upperValueMap,
+        const std::vector<Value*>& argsRef);
 
-    void evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
+    bool evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                        ValueMap& valueMap, bool isMainFunction,
                        const ComptimeSet* comptimeSet = nullptr);
 
@@ -78,7 +79,7 @@ class ComptimePass : public ModulePass {
                                              bool skipSideEffect);
     Value* evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
 
-    void markAsRuntime(Value* value);
+    void markAsRuntime(Value* value, ValueMap& valueMap);
     void invalidateValuesFromCall(CallInst* call, ValueMap& valueMap);
 
     bool updateValueMap(Value* inst, Value* result, ValueMap& valueMap);
@@ -89,7 +90,7 @@ class ComptimePass : public ModulePass {
                            ValueMap& valueMap);
 
     size_t eliminateComputedInstructions(Function* func);
-    void initializeValues(Module& module);
+    bool initializeValues(Module& module);
     void initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
                               ConstantArray* arrayValue);
 

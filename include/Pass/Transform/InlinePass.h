@@ -46,8 +46,8 @@ class InlinePass : public ModulePass {
     bool shouldInline(Function* callee, CallInst* callSite,
                       const CallGraph& cg);
     bool inlineFunction(CallInst* callSite);
-    void cloneAndMapInstructions(Function* callee, BasicBlock* callBB,
-                                 BasicBlock* afterCallBB,
+    void cloneAndMapInstructions(Function* caller, Function* callee,
+                                 BasicBlock* callBB, BasicBlock* afterCallBB,
                                  std::unordered_map<Value*, Value*>& valueMap,
                                  Value** returnValue, unsigned inlineId);
 };

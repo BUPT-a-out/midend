@@ -530,6 +530,10 @@ bool PassManager::runPassOnModule(Pass& pass, Module& m) {
         changed = pass.runOnModule(m, analysisManager_);
     }
 
+    globalLogger.debug() << "Pass " << pass.getName()
+                         << (changed ? " changed the module"
+                                     : " did not change the module");
+
     if (changed) {
         analysisManager_.invalidateAllAnalyses(m);
         globalLogger.debug() << "Invalidated all analyses";

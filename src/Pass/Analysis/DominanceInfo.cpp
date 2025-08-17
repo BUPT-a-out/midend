@@ -739,9 +739,15 @@ void ReverseIDFCalculator::calculate(BBVector& IDFBlocks) {
                 DoWork(Succ);
             }
 
+            auto PDTNode = PDT_.getDominatorTree()->getNode(Node);
+
+            if (!PDTNode) {
+                throw std::runtime_error("Error: No dominator tree node for " +
+                                         Node->getName() + "\n");
+            }
+
             // Process post-dominator tree children
-            for (auto& Succ :
-                 PDT_.getDominatorTree()->getNode(Node)->children) {
+            for (auto& Succ : PDTNode->children) {
                 auto SuccNode = Succ.get();
                 if (VisitedWorklist.insert(SuccNode->bb).second) {
                     Worklist.push_back(SuccNode->bb);

@@ -211,8 +211,8 @@ bool InlinePass::inlineFunction(CallInst* callSite) {
     }
 
     Value* returnValue = nullptr;
-    cloneAndMapInstructions(callee, callBB, afterCallBB, valueMap, &returnValue,
-                            inlineId);
+    cloneAndMapInstructions(caller, callee, callBB, afterCallBB, valueMap,
+                            &returnValue, inlineId);
 
     if (returnValue) {
         callSite->replaceAllUsesWith(returnValue);
@@ -243,9 +243,9 @@ bool InlinePass::inlineFunction(CallInst* callSite) {
 }
 
 void InlinePass::cloneAndMapInstructions(
-    Function* callee, BasicBlock* callBB, BasicBlock* afterCallBB,
-    std::unordered_map<Value*, Value*>& valueMap, Value** returnValue,
-    unsigned inlineId) {
+    Function* caller, Function* callee, BasicBlock* callBB,
+    BasicBlock* afterCallBB, std::unordered_map<Value*, Value*>& valueMap,
+    Value** returnValue, unsigned inlineId) {
     std::vector<BasicBlock*> clonedBlocks;
     std::unordered_map<BasicBlock*, BasicBlock*> blockMap;
     std::vector<std::pair<BasicBlock*, Value*>> returnBlocks;
@@ -271,6 +271,13 @@ void InlinePass::cloneAndMapInstructions(
                         PHINode::Create(phi->getType(), phi->getName());
                     clonedBB->push_back(newPhi);
                     valueMap[srcInst] = newPhi;
+                } else if (auto* alloca = dyn_cast<AllocaInst>(srcInst)) {
+                    Instruction* clonedInst = srcInst->clone();
+                    if (!clonedInst) {
+                        continue;
+                    }
+                    caller->getEntryBlock().push_front(clonedInst);
+                    valueMap[srcInst] = clonedInst;
                 } else {
                     Instruction* clonedInst = srcInst->clone();
                     if (!clonedInst) {

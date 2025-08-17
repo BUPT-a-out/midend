@@ -226,10 +226,6 @@ BasicBlock* BasicBlock::split(iterator pos,
         newBB->insertAfter(cur);
     }
 
-    for (auto bb : parent_->getBasicBlocks()) {
-        std::cout << "[DEBUG] BasicBlock: " << bb->getName() << std::endl;
-    }
-
     return newBB;
 }
 

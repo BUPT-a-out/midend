@@ -49,7 +49,7 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
     Function* mainFunc = module.getFunction("main");
     if (mainFunc) {
         // Pass 1: Propagation - identify compile-time and runtime instructions
-        evaluateFunction(mainFunc, {}, true, nullptr);
+        evaluateFunction(mainFunc, {}, true, nullptr, globalValueMap, {});
 
         // Determine compile-time instruction set (value map - runtime set)
         for (auto& [val, result] : globalValueMap) {
@@ -67,13 +67,14 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
         runtimeValues.clear();
         initializeGlobalValueMap(module);
         isPropagation = false;
-        evaluateFunction(mainFunc, {}, true, &comptimeInsts);
+        evaluateFunction(mainFunc, {}, true, &comptimeInsts, globalValueMap,
+                         {});
 
         // Step 3: Eliminate computed instructions
         changed |= eliminateComputedInstructions(mainFunc) > 0;
 
         // Step 4: Initialize arrays with computed values
-        initializeValues(module);
+        changed |= initializeValues(module);
     }
 
     return changed;
@@ -235,7 +236,8 @@ void ComptimePass::initializeGlobalValueMap(Module& module) {
 
 std::pair<Value*, bool> ComptimePass::evaluateFunction(
     Function* func, const std::vector<Value*>& args, bool isMainFunction,
-    const ComptimeSet* comptimeSet) {
+    const ComptimeSet* comptimeSet, ValueMap& upperValueMap,
+    const std::vector<Value*>& argsRef) {
     if (func->isDeclaration()) {
         return std::make_pair(nullptr, false);
     }
@@ -248,10 +250,7 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
     // Bind function arguments
     for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
         valueMap[func->getArg(i)] = args[i];
-        std::cout << IRPrinter::toString(func->getArg(i)) << " = "
-                  << IRPrinter::toString(args[i]) << ", ";
     }
-    std::cout << std::endl;
 
     BasicBlock* currentBlock = &func->getEntryBlock();
     BasicBlock* prevBlock = nullptr;
@@ -260,8 +259,9 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
     // Simulate execution through the function
     while (currentBlock) {
         // Evaluate all instructions in the current block
-        evaluateBlock(currentBlock, prevBlock, valueMap, isMainFunction,
-                      comptimeSet);
+        bool blockHasRuntime = evaluateBlock(currentBlock, prevBlock, valueMap,
+                                             isMainFunction, comptimeSet);
+        runtime = runtime || blockHasRuntime;
 
         auto* terminator = currentBlock->getTerminator();
         if (!terminator) break;
@@ -300,6 +300,13 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
             break;
         }
     }
+
+    for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
+        if (runtimeValues.count(func->getArg(i))) {
+            markAsRuntime(argsRef[i], upperValueMap);
+        }
+    }
+
     DEBUG_OUT() << "[DEBUG] Function " << func->getName()
                 << " evaluated with return value: "
                 << (returnValue ? IRPrinter::toString(returnValue) : "nullptr")
@@ -308,9 +315,10 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
     return std::make_pair(returnValue, returnValue != nullptr && !runtime);
 }
 
-void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
+bool ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                                  ValueMap& valueMap, bool isMainFunction,
                                  const ComptimeSet* comptimeSet) {
+    bool runtime = false;
     // First handle PHI nodes
     handlePHINodes(block, prevBlock, valueMap);
 
@@ -355,8 +363,9 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
             auto [res, comptime] = evaluateCallInst(
                 call, valueMap, isMainFunction, skipSideEffect);
             result = res;
-            if (!comptime) {
-                markAsRuntime(inst);
+            if (!comptime || !res) {
+                markAsRuntime(inst, valueMap);
+                runtime = true;
             }
         } else if (auto* cast = dyn_cast<CastInst>(inst)) {
             result = evaluateCastInst(cast, valueMap);
@@ -370,6 +379,7 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
 
         updateValueMap(inst, result, valueMap);
     }
+    return runtime;
 }
 
 bool ComptimePass::updateValueMap(Value* key, Value* result,
@@ -385,7 +395,7 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
             if (valueMap[key] != result) {
                 DEBUG_OUT() << "[DEBUG] Value changed for " << key->getName()
                             << ", marking as runtime" << std::endl;
-                markAsRuntime(key);
+                markAsRuntime(key, valueMap);
                 runtime = true;
             }
         }
@@ -398,7 +408,7 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
             }
         }
         valueMap.erase(key);
-        markAsRuntime(key);
+        markAsRuntime(key, valueMap);
         runtime = true;
     }
     return runtime;
@@ -761,7 +771,7 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
 
     if (!value || skipSideEffect) {
         if (updateValueMap(ptr, nullptr, valueMap)) {
-            markAsRuntime(store);
+            markAsRuntime(store, valueMap);
         }
         DEBUG_OUT() << "\tside effect skipped or value not found" << std::endl;
         return nullptr;
@@ -780,7 +790,7 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
         DEBUG_OUT() << "\tupdated value for " << ptr->getName() << " = "
                     << IRPrinter::toString(value) << std::endl;
     } else {
-        markAsRuntime(store);
+        markAsRuntime(store, valueMap);
     }
     return store;
 }
@@ -834,18 +844,25 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
                         << std::endl;
             invalidateValuesFromCall(call, valueMap);
         }
+        markAsRuntime(call, valueMap);
         return std::make_pair(nullptr, false);
     }
 
     std::vector<Value*> args;
+    std::vector<Value*> argsRef;
     bool allArgsCompileTime = true;
     for (size_t i = 0; i < call->getNumArgOperands(); ++i) {
+        if (runtimeValues.count(call->getArgOperand(i))) {
+            allArgsCompileTime = false;
+            break;
+        }
         Value* arg = getValueOrConstant(call->getArgOperand(i), valueMap);
         if (!arg) {
             allArgsCompileTime = false;
             break;
         }
         args.push_back(arg);
+        argsRef.push_back(call->getArgOperand(i));
     }
 
     if (!allArgsCompileTime) {
@@ -859,7 +876,7 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
     }
     if (skipSideEffect) return std::make_pair(nullptr, false);
 
-    return evaluateFunction(func, args, false, nullptr);
+    return evaluateFunction(func, args, false, nullptr, valueMap, argsRef);
 }
 
 Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
@@ -954,7 +971,7 @@ void setGlobalInitializer(GlobalVariable* gv, Value* value) {
     }
 }
 
-void ComptimePass::initializeValues(Module& module) {
+bool ComptimePass::initializeValues(Module& module) {
     // Initialize global values
     for (auto* gv : module.globals()) {
         if (globalValueMap.count(gv)) {
@@ -965,7 +982,7 @@ void ComptimePass::initializeValues(Module& module) {
 
     // Initialize local arrays in main function
     Function* mainFunc = module.getFunction("main");
-    if (!mainFunc) return;
+    if (!mainFunc) return false;
     BasicBlock* entryBlock = &mainFunc->getEntryBlock();
     std::vector<std::pair<AllocaInst*, Value*>> localValues;
 
@@ -996,6 +1013,8 @@ void ComptimePass::initializeValues(Module& module) {
             builder.createStore(value, alloca);
         }
     }
+
+    return !localValues.empty();
 }
 
 void ComptimePass::initializeLocalArray(Function* mainFunc, AllocaInst* alloca,
@@ -1218,7 +1237,7 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
             if (auto* store = dyn_cast<StoreInst>(inst)) {
                 // Mark store target as runtime
                 Value* ptr = store->getPointerOperand();
-                markAsRuntime(ptr);
+                markAsRuntime(ptr, valueMap);
                 valueMap.erase(ptr);
                 globalValueMap.erase(ptr);
                 DEBUG_OUT()
@@ -1230,12 +1249,12 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
                 invalidateValuesFromCall(call, valueMap);
                 valueMap.erase(inst);
                 globalValueMap.erase(inst);
-                markAsRuntime(call);
+                markAsRuntime(call, valueMap);
                 DEBUG_OUT() << "[DEBUG RuntimePropagation] Invalidating values "
                                "and function result from call: "
                             << IRPrinter::toString(call) << std::endl;
             } else {
-                markAsRuntime(inst);
+                markAsRuntime(inst, valueMap);
                 valueMap.erase(inst);
                 globalValueMap.erase(inst);
                 DEBUG_OUT() << "[DEBUG RuntimePropagation] Marking instruction "
@@ -1254,8 +1273,10 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
     }
 }
 
-void ComptimePass::markAsRuntime(Value* value) {
+void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap) {
     if (!value) return;
+    DEBUG_OUT() << "[DEBUG] Marking as runtime: " << IRPrinter::toString(value)
+                << std::endl;
 
     if (auto gv = dyn_cast<GlobalVariable>(value)) {
         if (globalValueMap.count(gv)) {
@@ -1268,19 +1289,20 @@ void ComptimePass::markAsRuntime(Value* value) {
 
     // If it's a GEP, mark the base array as runtime
     if (auto* gep = dyn_cast<GetElementPtrInst>(value)) {
-        markAsRuntime(gep->getPointerOperand());
+        markAsRuntime(gep->getPointerOperand(), valueMap);
     }
     if (auto* constGEP = dyn_cast<ConstantGEP>(value)) {
-        markAsRuntime(constGEP->getArrayPointer());
+        markAsRuntime(constGEP->getArrayPointer(), valueMap);
     }
 }
 
 void ComptimePass::invalidateValuesFromCall(CallInst* call,
                                             ValueMap& valueMap) {
+    auto* func = call->getCalledFunction();
     // Invalidate all global variables
     std::vector<Value*> toErase;
     for (auto& [key, val] : valueMap) {
-        if (isa<GlobalVariable>(key)) {
+        if (isa<GlobalVariable>(key) && !func->isDeclaration()) {
             toErase.push_back(key);
         }
     }
@@ -1300,7 +1322,7 @@ void ComptimePass::invalidateValuesFromCall(CallInst* call,
     }
 
     for (auto* key : toErase) {
-        markAsRuntime(key);
+        markAsRuntime(key, valueMap);
     }
 }
 
