@@ -1,10 +1,10 @@
 #pragma once
 
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "Pass/Pass.h"
+#include "flat_hash_map/unordered_map.hpp"
 
 namespace midend {
 
@@ -39,10 +39,10 @@ class ComptimePass : public ModulePass {
         std::unordered_set<std::string>& preserved) const override;
 
    private:
-    using ValueMap = std::unordered_map<Value*, Value*>;
-    using RuntimeSet = std::unordered_set<Value*>;
-    using ComptimeSet = std::unordered_set<Instruction*>;
-    using VisitedSet = std::unordered_set<BasicBlock*>;
+    using ValueMap = ska::unordered_map<Value*, Value*>;
+    using RuntimeSet = ska::unordered_set<Value*>;
+    using ComptimeSet = ska::unordered_set<Instruction*>;
+    using VisitedSet = ska::unordered_set<BasicBlock*>;
 
     ValueMap globalValueMap;
     RuntimeSet runtimeValues;   // Values that become runtime-dependent

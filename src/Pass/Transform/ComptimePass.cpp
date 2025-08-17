@@ -1200,8 +1200,10 @@ void ComptimePass::collectFlatIndices(
 
 Value* ComptimePass::getValueOrConstant(Value* v, ValueMap& valueMap) {
     if (isa<Constant>(v)) return v;
-    if (valueMap.count(v)) return valueMap[v];
-    if (globalValueMap.count(v)) return globalValueMap[v];
+    auto it = valueMap.find(v);
+    if (it != valueMap.end()) return it->second;
+    auto it2 = globalValueMap.find(v);
+    if (it2 != globalValueMap.end()) return it2->second;
     return nullptr;
 }
 
