@@ -2290,3 +2290,114 @@ entry.split.1:
 }
 )");
 }
+
+// Test 23: Translation of a.c - global variable with function calls in loop
+TEST_F(ComptimeTest, GlobalVariableWithFunctionCallsInLoop) {
+    auto intType = ctx->getIntegerType(32);
+    auto voidType = ctx->getVoidType();
+
+    // Create global variable g = 0
+    auto globalG =
+        GlobalVariable::Create(intType, false, GlobalVariable::InternalLinkage,
+                               builder->getInt32(0), "g", module.get());
+
+    // Create function f() that increments g
+    auto fFuncType = FunctionType::get(voidType, {});
+    auto fFunc = Function::Create(fFuncType, "f", module.get());
+    auto fBB = BasicBlock::Create(ctx.get(), "entry", fFunc);
+    builder->setInsertPoint(fBB);
+
+    auto gLoad = builder->createLoad(globalG, "g_load");
+    auto gIncr = builder->createAdd(gLoad, builder->getInt32(1), "g_incr");
+    builder->createStore(gIncr, globalG);
+    builder->createRetVoid();
+
+    // Create main function
+    auto mainFuncType = FunctionType::get(intType, {});
+    auto mainFunc = Function::Create(mainFuncType, "main", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", mainFunc);
+    auto loopCondBB = BasicBlock::Create(ctx.get(), "loop.cond", mainFunc);
+    auto loopBodyBB = BasicBlock::Create(ctx.get(), "loop.body", mainFunc);
+    auto exitBB = BasicBlock::Create(ctx.get(), "exit", mainFunc);
+
+    // Entry block
+    builder->setInsertPoint(entryBB);
+    builder->createBr(loopCondBB);
+
+    // Loop condition: while (g < 2)
+    builder->setInsertPoint(loopCondBB);
+    auto gLoadCond = builder->createLoad(globalG, "g_cond");
+    auto cond = builder->createICmpSLT(gLoadCond, builder->getInt32(2), "cond");
+    builder->createCondBr(cond, loopBodyBB, exitBB);
+
+    // Loop body: call f()
+    builder->setInsertPoint(loopBodyBB);
+    builder->createCall(fFunc, {});
+    builder->createBr(loopCondBB);
+
+    // Exit: return g
+    builder->setInsertPoint(exitBB);
+    auto gFinal = builder->createLoad(globalG, "g_final");
+    builder->createRet(gFinal);
+
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+@g = internal global i32 0
+
+define void @f() {
+entry:
+  %g_load = load i32, i32* @g
+  %g_incr = add i32 %g_load, 1
+  store i32 %g_incr, i32* @g
+  ret void
+}
+
+define i32 @main() {
+entry:
+  br label %loop.cond
+loop.cond:
+  %g_cond = load i32, i32* @g
+  %cond = icmp slt i32 %g_cond, 2
+  br i1 %cond, label %loop.body, label %exit
+loop.body:
+  call void @f()
+  br label %loop.cond
+exit:
+  %g_final = load i32, i32* @g
+  ret i32 %g_final
+}
+
+)");
+
+    ComptimePass pass;
+    bool changed = pass.runOnModule(*module, *am);
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+@g = internal global i32 2
+
+define void @f() {
+entry:
+  %g_load = load i32, i32* @g
+  %g_incr = add i32 %g_load, 1
+  store i32 %g_incr, i32* @g
+  ret void
+}
+
+define i32 @main() {
+entry:
+  br label %loop.cond
+loop.cond:
+  %g_cond = load i32, i32* @g
+  %cond = icmp slt i32 %g_cond, 2
+  br i1 %cond, label %loop.body, label %exit
+loop.body:
+  br label %loop.cond
+exit:
+  ret i32 2
+}
+
+)");
+}

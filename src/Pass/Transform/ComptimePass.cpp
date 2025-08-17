@@ -261,7 +261,7 @@ void ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                 call, valueMap, isMainFunction, skipSideEffect);
             result = res;
             if (!comptime) {
-                markAsRuntime(inst, valueMap);
+                markAsRuntime(inst);
             }
         } else if (auto* cast = dyn_cast<CastInst>(inst)) {
             result = evaluateCastInst(cast, valueMap);
@@ -290,7 +290,7 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
             if (valueMap[key] != result) {
                 DEBUG_OUT() << "[DEBUG] Value changed for " << key->getName()
                             << ", marking as runtime" << std::endl;
-                markAsRuntime(key, valueMap);
+                markAsRuntime(key);
                 runtime = true;
             }
         }
@@ -303,7 +303,7 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
             }
         }
         valueMap.erase(key);
-        markAsRuntime(key, valueMap);
+        markAsRuntime(key);
         runtime = true;
     }
     return runtime;
@@ -638,15 +638,16 @@ Value* ComptimePass::evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap) {
 Value* ComptimePass::evaluateLoadInst(LoadInst* load, ValueMap& valueMap) {
     Value* ptr = load->getPointerOperand();
 
-    // If the pointer is in the value map, return its value
-    if (valueMap.count(ptr) && runtimeValues.find(ptr) == runtimeValues.end()) {
-        Value* v = valueMap[ptr];
+    auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
+
+    if (localValueMap.count(ptr) &&
+        runtimeValues.find(ptr) == runtimeValues.end()) {
+        Value* v = localValueMap[ptr];
         if (auto* gepConst = dyn_cast<ConstantGEP>(v)) {
             return gepConst->getElement();
         }
         return v;
     }
-
     return nullptr;
 }
 
@@ -657,19 +658,26 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
 
     if (!value || skipSideEffect) {
         if (updateValueMap(ptr, nullptr, valueMap)) {
-            markAsRuntime(store, valueMap);
+            markAsRuntime(store);
         }
+        DEBUG_OUT() << "\tside effect skipped or value not found" << std::endl;
         return nullptr;
     }
 
-    if (valueMap.count(ptr)) {
+    if (isa<GlobalVariable>(ptr)) {
+        globalValueMap[ptr] = value;
+        DEBUG_OUT() << "\tupdated global value for " << ptr->getName() << " = "
+                    << IRPrinter::toString(value) << std::endl;
+    } else if (valueMap.count(ptr)) {
         if (auto* gepConst = dyn_cast<ConstantGEP>(valueMap[ptr])) {
             gepConst->setElementValue(value);
         } else {
             valueMap[ptr] = value;
         }
+        DEBUG_OUT() << "\tupdated value for " << ptr->getName() << " = "
+                    << IRPrinter::toString(value) << std::endl;
     } else {
-        markAsRuntime(store, valueMap);
+        markAsRuntime(store);
     }
     return store;
 }
@@ -677,17 +685,19 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
 Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
     Value* ptr = gep->getPointerOperand();
 
-    if (!valueMap.count(ptr)) {
+    auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
+
+    if (!localValueMap.count(ptr)) {
         return nullptr;
     }
 
-    Value* baseVal = valueMap[ptr];
+    Value* baseVal = localValueMap[ptr];
 
     // Collect indices as ConstantInt*
     std::vector<ConstantInt*> ciIndices;
     ciIndices.reserve(gep->getNumIndices());
     for (size_t i = 0; i < gep->getNumIndices(); ++i) {
-        Value* idx = getValueOrConstant(gep->getIndex(i), valueMap);
+        Value* idx = getValueOrConstant(gep->getIndex(i), localValueMap);
         if (auto* ci = dyn_cast<ConstantInt>(idx)) {
             ciIndices.push_back(ci);
         } else {
@@ -1065,6 +1075,7 @@ void ComptimePass::collectFlatIndices(
 Value* ComptimePass::getValueOrConstant(Value* v, ValueMap& valueMap) {
     if (isa<Constant>(v)) return v;
     if (valueMap.count(v)) return valueMap[v];
+    if (globalValueMap.count(v)) return globalValueMap[v];
     return nullptr;
 }
 
@@ -1100,7 +1111,7 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
             if (auto* store = dyn_cast<StoreInst>(inst)) {
                 // Mark store target as runtime
                 Value* ptr = store->getPointerOperand();
-                markAsRuntime(ptr, valueMap);
+                markAsRuntime(ptr);
                 DEBUG_OUT()
                     << "[DEBUG RuntimePropagation] Marking store target "
                        "as runtime: "
@@ -1124,17 +1135,17 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
     }
 }
 
-void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap) {
+void ComptimePass::markAsRuntime(Value* value) {
     if (!value) return;
 
     runtimeValues.insert(value);
 
     // If it's a GEP, mark the base array as runtime
     if (auto* gep = dyn_cast<GetElementPtrInst>(value)) {
-        markAsRuntime(gep->getPointerOperand(), valueMap);
+        markAsRuntime(gep->getPointerOperand());
     }
     if (auto* constGEP = dyn_cast<ConstantGEP>(value)) {
-        markAsRuntime(constGEP->getArrayPointer(), valueMap);
+        markAsRuntime(constGEP->getArrayPointer());
     }
 }
 
@@ -1163,7 +1174,7 @@ void ComptimePass::invalidateArraysFromCall(CallInst* call,
     }
 
     for (auto* key : toErase) {
-        markAsRuntime(key, valueMap);
+        markAsRuntime(key);
     }
 }
 
