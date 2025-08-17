@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Pass/Analysis/AliasAnalysis.h"
+#include "Pass/Analysis/MemorySSA.h"
 #include "Pass/Pass.h"
 
 namespace midend {
@@ -45,6 +46,7 @@ class GVNPass : public FunctionPass {
         std::vector<unsigned> operands;  // Value numbers of operands
         Value* constant = nullptr;       // For constant values
         Value* memoryPtr = nullptr;      // For load instructions
+        unsigned memoryState = 0;        // Memory SSA state for loads
 
         bool operator==(const Expression& other) const;
     };
@@ -62,6 +64,7 @@ class GVNPass : public FunctionPass {
     DominanceInfo* DI = nullptr;
     CallGraph* CG = nullptr;
     AliasAnalysis::Result* AA = nullptr;
+    MemorySSA* MSSA = nullptr;
 
     unsigned numGVNEliminated = 0;
     unsigned numPHIEliminated = 0;
@@ -88,6 +91,34 @@ class GVNPass : public FunctionPass {
                              Value* ptr);
     void recordAvailableLoad(Instruction* Load);
     void invalidateLoads(Instruction* Store);
+
+    // Memory SSA enhanced methods
+    bool processMemoryInstructionWithMSSA(Instruction* I);
+    bool eliminateLoadRedundancyWithMSSA(Instruction* Load);
+    Value* findAvailableLoadWithMSSA(LoadInst* LI);
+    Value* findLoadValueInPredecessors(LoadInst* LI, BasicBlock* BB);
+    bool canEliminateLoadWithMSSA(LoadInst* LI, MemoryAccess* clobber);
+    Value* insertPhiForLoadValue(
+        LoadInst* LI,
+        const std::vector<std::pair<BasicBlock*, Value*>>& incomingValues);
+    unsigned getMemoryStateValueNumber(MemoryAccess* access);
+    Expression createMemoryExpression(LoadInst* LI);
+
+    // Array and GEP specific optimizations
+    bool analyzeGEPAccess(GetElementPtrInst* GEP, LoadInst* LI);
+    bool isConstantGEP(GetElementPtrInst* GEP);
+    int64_t computeGEPOffset(GetElementPtrInst* GEP);
+
+    // Cross-block optimization helpers
+    struct LoadValueInfo {
+        Value* value;
+        BasicBlock* block;
+        MemoryAccess* memoryState;
+        bool isValid;
+    };
+
+    std::vector<LoadValueInfo> collectLoadValuesFromPredecessors(
+        LoadInst* LI, BasicBlock* BB);
 
     bool processFunctionCall(Instruction* Call);
     bool isPureFunction(Function* F);
@@ -122,6 +153,29 @@ class GVNPass : public FunctionPass {
     };
 
     std::unordered_map<BasicBlock*, BlockInfo> blockInfoMap;
+
+    // Memory SSA specific data structures
+    std::unordered_map<MemoryAccess*, unsigned> memoryAccessToValueNumber;
+    std::unordered_map<LoadInst*, std::vector<LoadValueInfo>> loadValueCache;
+
+    struct LoadBlockPair {
+        LoadInst* load;
+        BasicBlock* block;
+
+        bool operator==(const LoadBlockPair& other) const {
+            return load == other.load && block == other.block;
+        }
+    };
+
+    struct LoadBlockPairHash {
+        std::size_t operator()(const LoadBlockPair& pair) const {
+            return std::hash<void*>()(pair.load) ^
+                   (std::hash<void*>()(pair.block) << 1);
+        }
+    };
+
+    std::unordered_map<LoadBlockPair, Value*, LoadBlockPairHash>
+        crossBlockLoadCache;
 
     bool isSafeToEliminate(Instruction* I);
     bool hasMemoryEffects(Instruction* I);

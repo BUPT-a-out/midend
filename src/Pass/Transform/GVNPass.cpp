@@ -14,6 +14,7 @@
 #include "Pass/Analysis/AliasAnalysis.h"
 #include "Pass/Analysis/CallGraph.h"
 #include "Pass/Analysis/DominanceInfo.h"
+#include "Pass/Analysis/MemorySSA.h"
 #include "Support/Casting.h"
 
 constexpr bool GVN_DEBUG = false;
@@ -58,7 +59,8 @@ void GVNPass::UnionFind::makeSet(unsigned x) {
 
 bool GVNPass::Expression::operator==(const Expression& other) const {
     return opcode == other.opcode && operands == other.operands &&
-           constant == other.constant && memoryPtr == other.memoryPtr;
+           constant == other.constant && memoryPtr == other.memoryPtr &&
+           memoryState == other.memoryState;
 }
 
 std::size_t GVNPass::ExpressionHash::operator()(const Expression& expr) const {
@@ -77,6 +79,10 @@ std::size_t GVNPass::ExpressionHash::operator()(const Expression& expr) const {
         hash = hash * 31 + std::hash<void*>()(expr.memoryPtr);
     }
 
+    if (expr.memoryState != 0) {
+        hash = hash * 31 + std::hash<unsigned>()(expr.memoryState);
+    }
+
     return hash;
 }
 
@@ -84,11 +90,22 @@ bool GVNPass::runOnFunction(Function& F, AnalysisManager& AM) {
     DI = AM.getAnalysis<DominanceInfo>("DominanceAnalysis", F);
     CG = AM.getAnalysis<CallGraph>("CallGraphAnalysis", *F.getParent());
     AA = AM.getAnalysis<AliasAnalysis::Result>("AliasAnalysis", F);
+    MSSA = AM.getAnalysis<MemorySSA>("MemorySSAAnalysis", F);
     if (!AA || !DI || !CG) {
-        std::cerr << "Warning: GVNPass requires DominanceInfo, CallGraph, and "
-                     "AliasAnalysis. Skipping function "
+        std::cerr << "Warning: GVNPass requires DominanceInfo, CallGraph, "
+                     "and AliasAnalysis. Skipping function "
                   << F.getName() << "." << std::endl;
         return false;
+    }
+
+    // MemorySSA is optional - GVN works without it but uses enhanced
+    // optimization when available
+    if (!MSSA) {
+        if constexpr (GVN_DEBUG) {
+            std::cout << "GVN: Memory SSA not available, using basic "
+                         "optimization for function "
+                      << F.getName() << std::endl;
+        }
     }
 
     valueNumberToValue.clear();
@@ -101,6 +118,11 @@ bool GVNPass::runOnFunction(Function& F, AnalysisManager& AM) {
     numCallEliminated = 0;
     blockInfoMap.clear();
     equivalenceClasses = UnionFind();
+
+    // Clear Memory SSA specific data structures
+    memoryAccessToValueNumber.clear();
+    loadValueCache.clear();
+    crossBlockLoadCache.clear();
 
     bool changed = processFunction(F);
 
@@ -158,7 +180,12 @@ bool GVNPass::processInstruction(Instruction* I) {
     if (auto* PHI = dyn_cast<PHINode>(I)) {
         return eliminatePHIRedundancy(PHI);
     } else if (isa<LoadInst>(I)) {
-        return processMemoryInstruction(I);
+        // Use Memory SSA enhanced processing if available
+        if (MSSA) {
+            return processMemoryInstructionWithMSSA(I);
+        } else {
+            return processMemoryInstruction(I);
+        }
     } else if (isa<StoreInst>(I)) {
         invalidateLoads(I);
         return false;
@@ -228,8 +255,9 @@ GVNPass::Expression GVNPass::createExpression(Instruction* I) {
     } else if (auto* Cast = dyn_cast<CastInst>(I)) {
         expr.operands.push_back(getValueNumber(Cast->getOperand(0)));
     } else if (auto* GEP = dyn_cast<GetElementPtrInst>(I)) {
+        // Use type ID instead of pointer casting for safety
         auto* resultType = GEP->getType();
-        expr.operands.push_back(reinterpret_cast<uintptr_t>(resultType));
+        expr.operands.push_back(static_cast<unsigned>(resultType->getKind()));
 
         for (unsigned i = 0; i < GEP->getNumOperands(); ++i) {
             expr.operands.push_back(getValueNumber(GEP->getOperand(i)));
@@ -373,7 +401,9 @@ bool GVNPass::eliminatePHIRedundancy(PHINode* PHI) {
 
     for (const auto& pair : incomingPairs) {
         expr.operands.push_back(getValueNumber(pair.second));
-        expr.operands.push_back(reinterpret_cast<uintptr_t>(pair.first));
+        // Use block hash instead of pointer casting for safety
+        expr.operands.push_back(
+            std::hash<std::string>()(pair.first->getName()));
     }
 
     return eliminateRedundancy(PHI, expr);
@@ -402,14 +432,6 @@ bool GVNPass::eliminateLoadRedundancy(Instruction* Load) {
     // Look for available loads in current and dominating blocks
     Value* availLoad = findAvailableLoad(LI, LI->getParent());
     if (availLoad && availLoad != LI) {
-        if (auto* availInst = dyn_cast<LoadInst>(availLoad)) {
-            if (AA && AA->alias(LI->getPointerOperand(),
-                                availInst->getPointerOperand()) ==
-                          AliasAnalysis::AliasResult::MustAlias) {
-                return false;
-            }
-        }
-
         if constexpr (GVN_DEBUG) {
             std::cout << "GVN: Eliminated redundant load: " << LI->getName()
                       << " with " << availLoad->getName() << std::endl;
@@ -807,6 +829,354 @@ Value* GVNPass::trySimplifyInstruction(Instruction* I) {
     }
 
     return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// Memory SSA Enhanced GVN Implementation
+//===----------------------------------------------------------------------===//
+
+bool GVNPass::processMemoryInstructionWithMSSA(Instruction* I) {
+    auto* LI = cast<LoadInst>(I);
+
+    // Try Memory SSA enhanced load elimination
+    if (eliminateLoadRedundancyWithMSSA(LI)) {
+        numLoadEliminated++;
+        return true;
+    }
+
+    // Create memory expression with Memory SSA state
+    Expression expr = createMemoryExpression(LI);
+    return eliminateRedundancy(I, expr);
+}
+
+bool GVNPass::eliminateLoadRedundancyWithMSSA(Instruction* Load) {
+    auto* LI = cast<LoadInst>(Load);
+
+    // Find available load using Memory SSA
+    Value* availValue = findAvailableLoadWithMSSA(LI);
+    if (availValue && availValue != LI) {
+        if constexpr (GVN_DEBUG) {
+            std::cout << "GVN-MSSA: Eliminated redundant load: "
+                      << LI->getName() << " with " << availValue->getName()
+                      << std::endl;
+        }
+        replaceAndErase(LI, availValue);
+        return true;
+    }
+
+    return false;
+}
+
+Value* GVNPass::findAvailableLoadWithMSSA(LoadInst* LI) {
+    if (!MSSA) return nullptr;
+
+    // Get the memory access for this load
+    MemoryAccess* loadAccess = MSSA->getMemoryAccess(LI);
+    if (!loadAccess) return nullptr;
+
+    // Find the clobbering memory access
+    MemoryAccess* clobber = MSSA->getClobberingMemoryAccess(loadAccess);
+    if (!clobber) return nullptr;
+
+    // Check if we can eliminate this load based on the clobber
+    if (canEliminateLoadWithMSSA(LI, clobber)) {
+        if (auto* clobberDef = dyn_cast<MemoryDef>(clobber)) {
+            // If the clobber is a store to the same location
+            if (auto* SI = dyn_cast<StoreInst>(clobberDef->getMemoryInst())) {
+                if (AA->alias(LI->getPointerOperand(),
+                              SI->getPointerOperand()) ==
+                    AliasAnalysis::AliasResult::MustAlias) {
+                    return SI->getValueOperand();
+                }
+            }
+            // If the clobber is another load from the same location
+            else if (auto* otherLI =
+                         dyn_cast<LoadInst>(clobberDef->getMemoryInst())) {
+                if (AA->alias(LI->getPointerOperand(),
+                              otherLI->getPointerOperand()) ==
+                    AliasAnalysis::AliasResult::MustAlias) {
+                    return otherLI;
+                }
+            }
+        }
+    }
+
+    // Try to find value in predecessors
+    return findLoadValueInPredecessors(LI, LI->getParent());
+}
+
+Value* GVNPass::findLoadValueInPredecessors(LoadInst* LI, BasicBlock* BB) {
+    if (!LI || !BB) return nullptr;
+
+    // Check cache first
+    LoadBlockPair key{LI, BB};
+    auto cacheIt = crossBlockLoadCache.find(key);
+    if (cacheIt != crossBlockLoadCache.end()) {
+        return cacheIt->second;
+    }
+
+    // Collect available values from all predecessors
+    std::vector<LoadValueInfo> predecessorValues =
+        collectLoadValuesFromPredecessors(LI, BB);
+
+    if (predecessorValues.empty()) {
+        crossBlockLoadCache[key] = nullptr;
+        return nullptr;
+    }
+
+    // If all predecessors provide the same value, use it directly
+    if (predecessorValues.size() == 1) {
+        Value* result = predecessorValues[0].value;
+        crossBlockLoadCache[key] = result;
+        return result;
+    }
+
+    // Check if all predecessors provide the same value
+    Value* commonValue = predecessorValues[0].value;
+    bool allSame = true;
+    for (size_t i = 1; i < predecessorValues.size(); ++i) {
+        if (predecessorValues[i].value != commonValue) {
+            allSame = false;
+            break;
+        }
+    }
+
+    if (allSame) {
+        crossBlockLoadCache[key] = commonValue;
+        return commonValue;
+    }
+
+    // Need to insert phi node for different values
+    std::vector<std::pair<BasicBlock*, Value*>> incomingValues;
+    for (const auto& valueInfo : predecessorValues) {
+        if (valueInfo.isValid) {
+            incomingValues.emplace_back(valueInfo.block, valueInfo.value);
+        }
+    }
+
+    if (incomingValues.size() > 1) {
+        Value* phi = insertPhiForLoadValue(LI, incomingValues);
+        crossBlockLoadCache[key] = phi;
+        return phi;
+    }
+
+    crossBlockLoadCache[key] = nullptr;
+    return nullptr;
+}
+
+std::vector<GVNPass::LoadValueInfo> GVNPass::collectLoadValuesFromPredecessors(
+    LoadInst* LI, BasicBlock* BB) {
+    std::vector<LoadValueInfo> result;
+
+    for (BasicBlock* pred : BB->getPredecessors()) {
+        LoadValueInfo info;
+        info.block = pred;
+        info.isValid = false;
+
+        // Look for loads or stores in the predecessor that provide the value
+        for (auto it = pred->rbegin(); it != pred->rend(); ++it) {
+            Instruction* inst = *it;
+
+            // Check for store to the same location
+            if (auto* SI = dyn_cast<StoreInst>(inst)) {
+                if (AA->alias(LI->getPointerOperand(),
+                              SI->getPointerOperand()) ==
+                    AliasAnalysis::AliasResult::MustAlias) {
+                    info.value = SI->getValueOperand();
+                    info.isValid = true;
+                    break;
+                }
+            }
+            // Check for load from the same location
+            else if (auto* otherLI = dyn_cast<LoadInst>(inst)) {
+                if (AA->alias(LI->getPointerOperand(),
+                              otherLI->getPointerOperand()) ==
+                    AliasAnalysis::AliasResult::MustAlias) {
+                    info.value = otherLI;
+                    info.isValid = true;
+                    break;
+                }
+            }
+            // Function calls may clobber memory
+            else if (isa<CallInst>(inst)) {
+                // Conservative: assume call clobbers everything
+                break;
+            }
+        }
+
+        // If not found in current block, recurse to predecessors
+        // Add cycle detection to prevent infinite recursion
+        if (!info.isValid && DI->dominates(pred, BB) && pred != BB) {
+            Value* recursiveValue = findLoadValueInPredecessors(LI, pred);
+            if (recursiveValue) {
+                info.value = recursiveValue;
+                info.isValid = true;
+            }
+        }
+
+        if (info.isValid) {
+            result.push_back(info);
+        }
+    }
+
+    return result;
+}
+
+bool GVNPass::canEliminateLoadWithMSSA(LoadInst* LI, MemoryAccess* clobber) {
+    if (!clobber || !LI || !MSSA) return false;
+
+    // If clobber is live-on-entry, we can't eliminate
+    if (clobber == MSSA->getLiveOnEntry()) {
+        return false;
+    }
+
+    // If clobber is a MemoryDef, check if it's a compatible operation
+    if (auto* memDef = dyn_cast<MemoryDef>(clobber)) {
+        Instruction* clobberInst = memDef->getMemoryInst();
+        if (!clobberInst) return false;
+
+        // Must dominate the load
+        if (!DI->dominates(clobberInst->getParent(), LI->getParent())) {
+            return false;
+        }
+
+        // Check for store-to-load forwarding
+        if (auto* SI = dyn_cast<StoreInst>(clobberInst)) {
+            return AA->alias(LI->getPointerOperand(),
+                             SI->getPointerOperand()) ==
+                   AliasAnalysis::AliasResult::MustAlias;
+        }
+
+        // Check for load-to-load forwarding
+        if (auto* otherLI = dyn_cast<LoadInst>(clobberInst)) {
+            return AA->alias(LI->getPointerOperand(),
+                             otherLI->getPointerOperand()) ==
+                   AliasAnalysis::AliasResult::MustAlias;
+        }
+    }
+
+    return false;
+}
+
+Value* GVNPass::insertPhiForLoadValue(
+    LoadInst* LI,
+    const std::vector<std::pair<BasicBlock*, Value*>>& incomingValues) {
+    BasicBlock* loadBB = LI->getParent();
+
+    // Create PHI node at the beginning of the load's basic block
+    auto* phi = PHINode::Create(LI->getType(), "load.phi", loadBB);
+    // Move PHI to the beginning of the block
+    if (!loadBB->empty()) {
+        phi->moveBefore(&loadBB->front());
+    }
+
+    // Add incoming values
+    for (const auto& [block, value] : incomingValues) {
+        phi->addIncoming(value, block);
+    }
+
+    if constexpr (GVN_DEBUG) {
+        std::cout << "GVN-MSSA: Inserted phi for load: " << LI->getName()
+                  << " with " << incomingValues.size() << " incoming values"
+                  << std::endl;
+    }
+
+    return phi;
+}
+
+unsigned GVNPass::getMemoryStateValueNumber(MemoryAccess* access) {
+    if (!access) return 0;
+
+    auto it = memoryAccessToValueNumber.find(access);
+    if (it != memoryAccessToValueNumber.end()) {
+        return it->second;
+    }
+
+    unsigned vn = nextValueNumber++;
+    memoryAccessToValueNumber[access] = vn;
+    return vn;
+}
+
+GVNPass::Expression GVNPass::createMemoryExpression(LoadInst* LI) {
+    Expression expr;
+    expr.opcode = static_cast<unsigned>(LI->getOpcode());
+    expr.memoryPtr = LI->getPointerOperand();
+
+    // Add memory state from Memory SSA if available
+    if (MSSA) {
+        MemoryAccess* memAccess = MSSA->getMemoryAccess(LI);
+        if (memAccess) {
+            MemoryAccess* clobber = MSSA->getClobberingMemoryAccess(memAccess);
+            if (clobber) {
+                expr.memoryState = getMemoryStateValueNumber(clobber);
+            }
+        }
+    }
+
+    // For GEP-based loads, include the GEP analysis
+    if (auto* GEP = dyn_cast<GetElementPtrInst>(LI->getPointerOperand())) {
+        analyzeGEPAccess(GEP, LI);
+
+        // Include GEP operands in the expression
+        for (unsigned i = 0; i < GEP->getNumOperands(); ++i) {
+            expr.operands.push_back(getValueNumber(GEP->getOperand(i)));
+        }
+    } else {
+        // Include pointer operand
+        expr.operands.push_back(getValueNumber(LI->getPointerOperand()));
+    }
+
+    return expr;
+}
+
+bool GVNPass::analyzeGEPAccess(GetElementPtrInst* GEP, LoadInst* LI) {
+    // Basic GEP analysis for array access patterns
+    if (!GEP || !LI) return false;
+
+    // Check if this is a constant GEP (all indices are constants)
+    if (isConstantGEP(GEP)) {
+        // Compute constant offset for better analysis
+        int64_t offset = computeGEPOffset(GEP);
+
+        if constexpr (GVN_DEBUG) {
+            std::cout << "GVN-MSSA: Constant GEP with offset " << offset
+                      << " for load " << LI->getName() << std::endl;
+        }
+
+        return true;
+    }
+
+    // For variable indices, we can still do some analysis
+    // but it's more conservative
+    return false;
+}
+
+bool GVNPass::isConstantGEP(GetElementPtrInst* GEP) {
+    if (!GEP) return false;
+
+    // Check if all indices are constants
+    for (unsigned i = 1; i < GEP->getNumOperands(); ++i) {
+        if (!isa<ConstantInt>(GEP->getOperand(i))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+int64_t GVNPass::computeGEPOffset(GetElementPtrInst* GEP) {
+    if (!GEP || !isConstantGEP(GEP)) return 0;
+
+    // Simplified offset calculation
+    // In a real implementation, this would need to consider type sizes
+    int64_t offset = 0;
+    for (unsigned i = 1; i < GEP->getNumOperands(); ++i) {
+        if (auto* CI = dyn_cast<ConstantInt>(GEP->getOperand(i))) {
+            offset += CI->getValue();
+        }
+    }
+
+    return offset;
 }
 
 }  // namespace midend
