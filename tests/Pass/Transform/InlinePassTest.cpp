@@ -957,10 +957,10 @@ loop_exit:
 
 define i32 @caller() {
 entry:
+  %i = alloca i32
+  %sum.addr = alloca i32
   br label %entry.inline1
 entry.inline1:
-  %sum.addr = alloca i32
-  %i = alloca i32
   store i32 0, i32* %sum.addr
   store i32 1, i32* %i
   br label %loop_cond.inline1
