@@ -35,7 +35,8 @@ class GVNPass : public FunctionPass {
     bool runOnFunction(Function& F, AnalysisManager& AM) override;
 
     std::vector<std::string> getDependencies() const {
-        return {"DominanceAnalysis", "CallGraphAnalysis", "AliasAnalysis"};
+        return {"DominanceAnalysis", "CallGraphAnalysis", "AliasAnalysis",
+                "MemorySSAAnalysis"};
     }
 
     void init() {}
@@ -99,6 +100,7 @@ class GVNPass : public FunctionPass {
     Value* findAvailableLoadWithMSSA(LoadInst* LI);
     Value* findLoadValueInPredecessors(LoadInst* LI, BasicBlock* BB);
     bool canEliminateLoadWithMSSA(LoadInst* LI, MemoryAccess* clobber);
+    bool instructionDependsOnLoad(Instruction* Inst, LoadInst* Load);
     Value* insertPhiForLoadValue(
         LoadInst* LI,
         const std::vector<std::pair<BasicBlock*, Value*>>& incomingValues);

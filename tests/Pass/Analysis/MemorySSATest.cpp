@@ -200,14 +200,36 @@ TEST_F(MemorySSATest, BasicConstruction) {
     auto result = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
     ASSERT_NE(result, nullptr);
 
-    // Check that the analysis has basic components
-    EXPECT_EQ(result->getFunction(), func);
-    EXPECT_NE(result->getLiveOnEntry(), nullptr);
-    EXPECT_NE(result->getDominanceInfo(), nullptr);
-    EXPECT_NE(result->getAliasAnalysis(), nullptr);
+    // Verify analysis configuration
+    EXPECT_EQ(result->getFunction(), func)
+        << "Analysis should be associated with correct function";
+    EXPECT_NE(result->getDominanceInfo(), nullptr)
+        << "Should have valid dominance information";
+    EXPECT_NE(result->getAliasAnalysis(), nullptr)
+        << "Should have valid alias analysis";
 
-    // Verify the analysis
-    EXPECT_TRUE(result->verify());
+    // Verify live-on-entry properties
+    auto* liveOnEntry = result->getLiveOnEntry();
+    ASSERT_NE(liveOnEntry, nullptr);
+    EXPECT_TRUE(isa<MemoryDef>(liveOnEntry))
+        << "Live-on-entry should be a MemoryDef";
+    EXPECT_EQ(liveOnEntry->getDefiningAccess(), nullptr)
+        << "Live-on-entry should have no defining access (root of chain)";
+    EXPECT_EQ(liveOnEntry->getMemoryInst(), nullptr)
+        << "Live-on-entry should have no associated instruction";
+    EXPECT_EQ(liveOnEntry->getBlock(), &func->getEntryBlock())
+        << "Live-on-entry should be in function entry block";
+
+    // Verify memory accesses were created for all memory operations
+    EXPECT_EQ(result->getMemoryAccesses().size(), 3u)
+        << "Should have memory accesses for alloca, store, and load";
+
+    // Verify no memory phis in simple single-block function
+    EXPECT_TRUE(result->getMemoryPhis().empty())
+        << "Single block function should have no memory phis";
+
+    // Verify analysis is in valid form
+    EXPECT_TRUE(result->verify()) << "Memory SSA should pass verification";
 }
 
 TEST_F(MemorySSATest, MemoryAccessCreation) {
@@ -281,7 +303,8 @@ TEST_F(MemorySSATest, DefUseChains) {
     ASSERT_NE(store, nullptr);
     ASSERT_NE(load, nullptr);
 
-    auto* allocaAccess = dyn_cast<MemoryDef>(result->getMemoryAccess(allocaInst));
+    auto* allocaAccess =
+        dyn_cast<MemoryDef>(result->getMemoryAccess(allocaInst));
     auto* storeAccess = dyn_cast<MemoryDef>(result->getMemoryAccess(store));
     auto* loadAccess = dyn_cast<MemoryUse>(result->getMemoryAccess(load));
 
@@ -290,18 +313,37 @@ TEST_F(MemorySSATest, DefUseChains) {
     ASSERT_NE(allocaAccess, nullptr);
     ASSERT_NE(storeAccess, nullptr);
     ASSERT_NE(loadAccess, nullptr);
+    ASSERT_NE(liveOnEntry, nullptr);
 
-    // The load should use the store as its defining access
-    EXPECT_EQ(loadAccess->getDefiningAccess(), storeAccess);
+    // Verify exact def-use chain: load -> store -> alloca -> live-on-entry
+    EXPECT_EQ(loadAccess->getDefiningAccess(), storeAccess)
+        << "Load should be defined by the store that writes to the same "
+           "location";
+    EXPECT_EQ(storeAccess->getDefiningAccess(), allocaAccess)
+        << "Store should be defined by the alloca that creates the memory "
+           "location";
+    EXPECT_EQ(allocaAccess->getDefiningAccess(), liveOnEntry)
+        << "Alloca should be defined by live-on-entry (initial memory state)";
+    EXPECT_EQ(liveOnEntry->getDefiningAccess(), nullptr)
+        << "Live-on-entry should have no defining access (root of chain)";
 
-    // The store should chain to the alloca
-    EXPECT_EQ(storeAccess->getDefiningAccess(), allocaAccess);
+    // Verify access IDs are unique and properly assigned
+    EXPECT_NE(loadAccess->getID(), storeAccess->getID());
+    EXPECT_NE(storeAccess->getID(), allocaAccess->getID());
+    EXPECT_NE(allocaAccess->getID(), liveOnEntry->getID());
 
-    // The alloca should chain to live-on-entry
-    EXPECT_EQ(allocaAccess->getDefiningAccess(), liveOnEntry);
+    // Verify that memory access blocks match instruction blocks
+    EXPECT_EQ(loadAccess->getBlock(), &func->getEntryBlock());
+    EXPECT_EQ(storeAccess->getBlock(), &func->getEntryBlock());
+    EXPECT_EQ(allocaAccess->getBlock(), &func->getEntryBlock());
+    EXPECT_EQ(liveOnEntry->getBlock(), &func->getEntryBlock());
 
-    // Live-on-entry should have no defining access
-    EXPECT_EQ(liveOnEntry->getDefiningAccess(), nullptr);
+    // Verify memory instruction relationships
+    EXPECT_EQ(loadAccess->getMemoryInst(), load);
+    EXPECT_EQ(storeAccess->getMemoryInst(), store);
+    EXPECT_EQ(allocaAccess->getMemoryInst(), allocaInst);
+    EXPECT_EQ(liveOnEntry->getMemoryInst(), nullptr)
+        << "Live-on-entry has no associated instruction";
 }
 
 TEST_F(MemorySSATest, LiveOnEntry) {
@@ -311,10 +353,42 @@ TEST_F(MemorySSATest, LiveOnEntry) {
     auto* liveOnEntry = result->getLiveOnEntry();
     ASSERT_NE(liveOnEntry, nullptr);
 
-    // Live on entry should be a MemoryDef with no defining access
-    EXPECT_TRUE(isa<MemoryDef>(liveOnEntry));
-    EXPECT_EQ(liveOnEntry->getDefiningAccess(), nullptr);
-    EXPECT_EQ(liveOnEntry->getBlock(), &func->getEntryBlock());
+    // Verify live-on-entry is correctly configured
+    EXPECT_TRUE(isa<MemoryDef>(liveOnEntry))
+        << "Live-on-entry should be a MemoryDef";
+    EXPECT_EQ(liveOnEntry->getKind(), MemoryAccess::MemoryDefKind);
+    EXPECT_TRUE(liveOnEntry->isMemoryDef());
+    EXPECT_FALSE(liveOnEntry->isMemoryUse());
+    EXPECT_FALSE(liveOnEntry->isMemoryPhi());
+
+    // Verify live-on-entry has no predecessors in def-use chain
+    EXPECT_EQ(liveOnEntry->getDefiningAccess(), nullptr)
+        << "Live-on-entry should be the root of all def-use chains";
+
+    // Verify live-on-entry location and instruction
+    EXPECT_EQ(liveOnEntry->getBlock(), &func->getEntryBlock())
+        << "Live-on-entry should be associated with function entry block";
+    EXPECT_EQ(liveOnEntry->getMemoryInst(), nullptr)
+        << "Live-on-entry should not be associated with any instruction";
+
+    // Find the alloca instruction and verify it chains to live-on-entry
+    AllocaInst* alloca = nullptr;
+    for (auto* inst : func->getEntryBlock()) {
+        if (auto* allocaInst = dyn_cast<AllocaInst>(inst)) {
+            alloca = allocaInst;
+            break;
+        }
+    }
+    ASSERT_NE(alloca, nullptr);
+
+    auto* allocaAccess = dyn_cast<MemoryDef>(result->getMemoryAccess(alloca));
+    ASSERT_NE(allocaAccess, nullptr);
+    EXPECT_EQ(allocaAccess->getDefiningAccess(), liveOnEntry)
+        << "First memory operation should be defined by live-on-entry";
+
+    // Verify live-on-entry has a unique ID
+    EXPECT_GE(liveOnEntry->getID(), 0u)
+        << "Live-on-entry should have a valid ID";
 }
 
 //===----------------------------------------------------------------------===//
@@ -344,27 +418,30 @@ TEST_F(MemorySSATest, MemoryPhiInsertion) {
         EXPECT_EQ(memPhi->getBlock(), merge);
 
         // Validate phi has correct number of operands
-        EXPECT_EQ(memPhi->getNumIncomingValues(), preds.size()) 
+        EXPECT_EQ(memPhi->getNumIncomingValues(), preds.size())
             << "MemoryPhi should have operands for all predecessor blocks";
 
         // Validate all incoming values and blocks
         for (unsigned i = 0; i < memPhi->getNumIncomingValues(); ++i) {
             BasicBlock* incomingBlock = memPhi->getIncomingBlock(i);
             MemoryAccess* incomingValue = memPhi->getIncomingValue(i);
-            
+
             EXPECT_TRUE(std::find(preds.begin(), preds.end(), incomingBlock) !=
-                        preds.end()) << "Incoming block must be a predecessor";
-            EXPECT_NE(incomingValue, nullptr) << "All incoming values must be non-null";
-            
+                        preds.end())
+                << "Incoming block must be a predecessor";
+            EXPECT_NE(incomingValue, nullptr)
+                << "All incoming values must be non-null";
+
             // Verify bidirectional lookup works
-            EXPECT_EQ(memPhi->getIncomingValueForBlock(incomingBlock), incomingValue)
+            EXPECT_EQ(memPhi->getIncomingValueForBlock(incomingBlock),
+                      incomingValue)
                 << "getIncomingValueForBlock should return consistent results";
         }
-        
+
         // Find stores in then and else blocks and verify phi inputs
         StoreInst* thenStore = nullptr;
         StoreInst* elseStore = nullptr;
-        
+
         for (auto* block : *func) {
             if (block->getName() == "then") {
                 for (auto* inst : *block) {
@@ -382,14 +459,14 @@ TEST_F(MemorySSATest, MemoryPhiInsertion) {
                 }
             }
         }
-        
+
         if (thenStore && elseStore) {
             auto* thenStoreAccess = result->getMemoryAccess(thenStore);
             auto* elseStoreAccess = result->getMemoryAccess(elseStore);
-            
+
             EXPECT_NE(thenStoreAccess, nullptr);
             EXPECT_NE(elseStoreAccess, nullptr);
-            
+
             // The phi should have incoming values from the store accesses
             bool foundThenInput = false, foundElseInput = false;
             for (unsigned i = 0; i < memPhi->getNumIncomingValues(); ++i) {
@@ -397,12 +474,12 @@ TEST_F(MemorySSATest, MemoryPhiInsertion) {
                 if (value == thenStoreAccess) foundThenInput = true;
                 if (value == elseStoreAccess) foundElseInput = true;
             }
-            EXPECT_TRUE(foundThenInput || foundElseInput) 
+            EXPECT_TRUE(foundThenInput || foundElseInput)
                 << "Phi should receive input from at least one store";
         }
     } else {
         // If no phi exists, verify there are no conflicting memory defs
-        EXPECT_TRUE(preds.size() <= 1) 
+        EXPECT_TRUE(preds.size() <= 1)
             << "Multiple predecessors with memory ops should create a phi";
     }
 
@@ -417,42 +494,91 @@ TEST_F(MemorySSATest, MemoryPhiOperands) {
     BasicBlock* merge = nullptr;
     BasicBlock* then_bb = nullptr;
     BasicBlock* else_bb = nullptr;
+    StoreInst* thenStore = nullptr;
+    StoreInst* elseStore = nullptr;
 
     for (auto* block : *func) {
         if (block->getName() == "merge") {
             merge = block;
         } else if (block->getName() == "then") {
             then_bb = block;
+            for (auto* inst : *block) {
+                if (auto* store = dyn_cast<StoreInst>(inst)) {
+                    thenStore = store;
+                    break;
+                }
+            }
         } else if (block->getName() == "else") {
             else_bb = block;
+            for (auto* inst : *block) {
+                if (auto* store = dyn_cast<StoreInst>(inst)) {
+                    elseStore = store;
+                    break;
+                }
+            }
         }
     }
+
+    ASSERT_NE(merge, nullptr);
+    ASSERT_NE(then_bb, nullptr);
+    ASSERT_NE(else_bb, nullptr);
+    ASSERT_NE(thenStore, nullptr);
+    ASSERT_NE(elseStore, nullptr);
 
     auto* memPhi = result->getMemoryPhi(merge);
-    if (memPhi != nullptr) {
-        // Test getIncomingValueForBlock completeness
-        for (unsigned i = 0; i < memPhi->getNumIncomingValues(); ++i) {
-            auto* block = memPhi->getIncomingBlock(i);
-            auto* value = memPhi->getIncomingValueForBlock(block);
-            EXPECT_NE(value, nullptr) << "All incoming values should be accessible";
-            EXPECT_EQ(value, memPhi->getIncomingValue(i)) 
-                << "Index-based and block-based access should be consistent";
-        }
+    ASSERT_NE(memPhi, nullptr)
+        << "Memory phi should exist at merge point with multiple predecessors";
 
-        // Test specific block lookups
-        if (then_bb && else_bb) {
-            auto* thenValue = memPhi->getIncomingValueForBlock(then_bb);
-            auto* elseValue = memPhi->getIncomingValueForBlock(else_bb);
+    // Verify phi has exactly 2 operands (from then and else branches)
+    EXPECT_EQ(memPhi->getNumIncomingValues(), 2u)
+        << "Memory phi should have exactly 2 incoming values from then/else "
+           "branches";
 
-            // Both branches should have values if they're predecessors
-            if (std::find(merge->getPredecessors().begin(), merge->getPredecessors().end(), then_bb) != merge->getPredecessors().end()) {
-                EXPECT_NE(thenValue, nullptr) << "Then branch should provide phi input";
-            }
-            if (std::find(merge->getPredecessors().begin(), merge->getPredecessors().end(), else_bb) != merge->getPredecessors().end()) {
-                EXPECT_NE(elseValue, nullptr) << "Else branch should provide phi input";
-            }
+    // Get the memory accesses for the stores
+    auto* thenStoreAccess = result->getMemoryAccess(thenStore);
+    auto* elseStoreAccess = result->getMemoryAccess(elseStore);
+    ASSERT_NE(thenStoreAccess, nullptr);
+    ASSERT_NE(elseStoreAccess, nullptr);
+
+    // Verify incoming values and blocks are correctly set
+    auto* thenValue = memPhi->getIncomingValueForBlock(then_bb);
+    auto* elseValue = memPhi->getIncomingValueForBlock(else_bb);
+
+    EXPECT_EQ(thenValue, thenStoreAccess)
+        << "Then branch should provide store access as phi input";
+    EXPECT_EQ(elseValue, elseStoreAccess)
+        << "Else branch should provide store access as phi input";
+
+    // Verify bidirectional lookup consistency
+    bool foundThen = false, foundElse = false;
+    for (unsigned i = 0; i < memPhi->getNumIncomingValues(); ++i) {
+        auto* block = memPhi->getIncomingBlock(i);
+        auto* value = memPhi->getIncomingValue(i);
+
+        EXPECT_NE(value, nullptr) << "All incoming values should be non-null";
+        EXPECT_EQ(value, memPhi->getIncomingValueForBlock(block))
+            << "Index-based and block-based access should be consistent";
+
+        if (block == then_bb) {
+            EXPECT_EQ(value, thenStoreAccess);
+            foundThen = true;
+        } else if (block == else_bb) {
+            EXPECT_EQ(value, elseStoreAccess);
+            foundElse = true;
         }
     }
+
+    EXPECT_TRUE(foundThen)
+        << "Memory phi should have incoming value from then branch";
+    EXPECT_TRUE(foundElse)
+        << "Memory phi should have incoming value from else branch";
+
+    // Verify phi block assignment
+    EXPECT_EQ(memPhi->getBlock(), merge);
+    EXPECT_EQ(memPhi->getKind(), MemoryAccess::MemoryPhiKind);
+    EXPECT_TRUE(memPhi->isMemoryPhi());
+    EXPECT_FALSE(memPhi->isMemoryDef());
+    EXPECT_FALSE(memPhi->isMemoryUse());
 }
 
 //===----------------------------------------------------------------------===//
@@ -489,36 +615,52 @@ TEST_F(MemorySSATest, ClobberingWithStores) {
     auto* func = createSimpleMemoryFunction();
     auto result = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
 
+    AllocaInst* alloca = nullptr;
     StoreInst* store = nullptr;
     LoadInst* load = nullptr;
 
     for (auto* inst : func->getEntryBlock()) {
-        if (auto* storeInst = dyn_cast<StoreInst>(inst)) {
+        if (auto* allocaInst = dyn_cast<AllocaInst>(inst)) {
+            alloca = allocaInst;
+        } else if (auto* storeInst = dyn_cast<StoreInst>(inst)) {
             store = storeInst;
         } else if (auto* loadInst = dyn_cast<LoadInst>(inst)) {
             load = loadInst;
         }
     }
 
+    ASSERT_NE(alloca, nullptr);
+
     ASSERT_NE(store, nullptr);
     ASSERT_NE(load, nullptr);
 
     auto* storeAccess = result->getMemoryAccess(store);
     auto* loadAccess = result->getMemoryAccess(load);
+    ASSERT_NE(storeAccess, nullptr);
+    ASSERT_NE(loadAccess, nullptr);
 
-    // The store should clobber the load (they access the same location)
+    // The store should be the clobbering access for the load
     auto* clobber = result->getClobberingMemoryAccess(loadAccess);
+    ASSERT_NE(clobber, nullptr);
 
-    // The clobber should be the store or something that dominates it
-    EXPECT_NE(clobber, nullptr);
+    // In our simple function: alloca -> store -> load
+    // The store should clobber the load since they access the same location
+    EXPECT_EQ(clobber, storeAccess)
+        << "Store should be the clobbering access for load from same location";
 
-    // Verify that the clobbering relationship makes sense
-    if (clobber == storeAccess) {
-        EXPECT_EQ(clobber, storeAccess);
-    } else {
-        // The clobber should dominate the store
-        EXPECT_NE(clobber, loadAccess);
-    }
+    // Verify clobbering query using instruction directly
+    auto* instrClobber = result->getClobberingMemoryAccess(load);
+    EXPECT_EQ(instrClobber, storeAccess)
+        << "Instruction-based clobbering query should return same result";
+
+    // For the store itself, its clobbering access should be the alloca
+    // (alloca creates the memory location that store writes to)
+    auto* allocaAccess = result->getMemoryAccess(alloca);
+    ASSERT_NE(allocaAccess, nullptr);
+    auto* storeClobber = result->getClobberingMemoryAccess(storeAccess);
+    EXPECT_EQ(storeClobber, allocaAccess)
+        << "Store should be clobbered by alloca (which creates the memory "
+           "location)";
 }
 
 //===----------------------------------------------------------------------===//
@@ -529,63 +671,86 @@ TEST_F(MemorySSATest, FunctionCallMemoryEffects) {
     auto* func = createFunctionCallMemoryFunction();
     auto result = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
 
-    // Find the function call
+    // Find all relevant instructions in order
+    AllocaInst* alloca = nullptr;
+    StoreInst* store = nullptr;
+    LoadInst* load1 = nullptr;
     CallInst* call = nullptr;
-    std::vector<LoadInst*> loads;
+    LoadInst* load2 = nullptr;
 
     for (auto* inst : func->getEntryBlock()) {
-        if (auto* callInst = dyn_cast<CallInst>(inst)) {
-            call = callInst;
+        if (auto* allocaInst = dyn_cast<AllocaInst>(inst)) {
+            alloca = allocaInst;
+        } else if (auto* storeInst = dyn_cast<StoreInst>(inst)) {
+            store = storeInst;
         } else if (auto* loadInst = dyn_cast<LoadInst>(inst)) {
-            loads.push_back(loadInst);
+            if (!load1) {
+                load1 = loadInst;
+            } else {
+                load2 = loadInst;
+            }
+        } else if (auto* callInst = dyn_cast<CallInst>(inst)) {
+            call = callInst;
         }
     }
 
+    ASSERT_NE(alloca, nullptr);
+    ASSERT_NE(store, nullptr);
+    ASSERT_NE(load1, nullptr);
     ASSERT_NE(call, nullptr);
-    EXPECT_EQ(loads.size(), 2u);
+    ASSERT_NE(load2, nullptr);
 
-    // The call should have a memory access (MemoryDef)
+    // Get memory accesses
+    auto* allocaAccess = result->getMemoryAccess(alloca);
+    auto* storeAccess = result->getMemoryAccess(store);
+    auto* load1Access = result->getMemoryAccess(load1);
     auto* callAccess = result->getMemoryAccess(call);
-    EXPECT_NE(callAccess, nullptr);
-    EXPECT_TRUE(isa<MemoryDef>(callAccess)) << "Function calls should create MemoryDef";
-    
-    // Validate the call's memory instruction relationship
-    auto* callDef = dyn_cast<MemoryDef>(callAccess);
-    ASSERT_NE(callDef, nullptr);
-    EXPECT_EQ(callDef->getMemoryInst(), call) << "MemoryDef should reference the call instruction";
+    auto* load2Access = result->getMemoryAccess(load2);
 
-    // The second load should be clobbered by the function call
-    auto* load1Access = result->getMemoryAccess(loads[0]);
-    auto* load2Access = result->getMemoryAccess(loads[1]);
-    
+    ASSERT_NE(allocaAccess, nullptr);
+    ASSERT_NE(storeAccess, nullptr);
     ASSERT_NE(load1Access, nullptr);
+    ASSERT_NE(callAccess, nullptr);
     ASSERT_NE(load2Access, nullptr);
-    
-    // First load should not be clobbered by the call (it happens before)
+
+    // Verify call creates a MemoryDef
+    EXPECT_TRUE(isa<MemoryDef>(callAccess))
+        << "Function calls should create MemoryDef (they may modify memory)";
+    auto* callDef = dyn_cast<MemoryDef>(callAccess);
+    EXPECT_EQ(callDef->getMemoryInst(), call);
+
+    // Verify exact def-use chains in execution order:
+    // alloca -> store -> load1 -> call -> load2
+    auto* load1Use = dyn_cast<MemoryUse>(load1Access);
+    auto* load2Use = dyn_cast<MemoryUse>(load2Access);
+    ASSERT_NE(load1Use, nullptr);
+    ASSERT_NE(load2Use, nullptr);
+
+    EXPECT_EQ(load1Use->getDefiningAccess(), storeAccess)
+        << "First load should be defined by the store";
+    EXPECT_EQ(callDef->getDefiningAccess(), storeAccess)
+        << "Call should be defined by store (last memory definition before it)";
+    EXPECT_EQ(load2Use->getDefiningAccess(), callAccess)
+        << "Second load should be defined by call (call may have modified "
+           "memory)";
+
+    // Verify clobbering relationships
     auto* load1Clobber = result->getClobberingMemoryAccess(load1Access);
-    EXPECT_NE(load1Clobber, callAccess) << "Load before call should not be clobbered by call";
-    
-    // Second load should be clobbered by the function call
+    EXPECT_EQ(load1Clobber, storeAccess)
+        << "First load should be clobbered by store to same location";
+
     auto* load2Clobber = result->getClobberingMemoryAccess(load2Access);
-    EXPECT_EQ(load2Clobber, callAccess) << "Load after call should be clobbered by call";
-    
-    // Test the call's defining access chain
-    auto* callDefiningAccess = callDef->getDefiningAccess();
-    EXPECT_NE(callDefiningAccess, nullptr) << "Call should have a defining access";
-    
-    // The call should define after some previous memory operation
-    // It should either chain to the first load, a store, or live-on-entry
-    bool validChain = (callDefiningAccess == load1Access || 
-                      isa<MemoryDef>(callDefiningAccess) ||
-                      callDefiningAccess == result->getLiveOnEntry());
-    EXPECT_TRUE(validChain) << "Call should chain to valid memory access";
-    
-    // Verify that loads have correct defining accesses
-    auto* load1DefAccess = dyn_cast<MemoryUse>(load1Access)->getDefiningAccess();
-    auto* load2DefAccess = dyn_cast<MemoryUse>(load2Access)->getDefiningAccess();
-    
-    EXPECT_NE(load1DefAccess, callAccess) << "First load should not depend on call";
-    EXPECT_EQ(load2DefAccess, callAccess) << "Second load should depend on call";
+    EXPECT_EQ(load2Clobber, callAccess)
+        << "Second load should be clobbered by function call (conservative)";
+
+    auto* callClobber = result->getClobberingMemoryAccess(callAccess);
+    EXPECT_EQ(callClobber, storeAccess) << "Call should be clobbered by store "
+                                           "(last write to memory before call)";
+
+    // Verify instruction-based clobbering queries
+    EXPECT_EQ(result->getClobberingMemoryAccess(load1), load1Clobber);
+    EXPECT_EQ(result->getClobberingMemoryAccess(load2), load2Clobber);
+    EXPECT_EQ(result->getClobberingMemoryAccess(call), callClobber);
 }
 
 //===----------------------------------------------------------------------===//
@@ -596,30 +761,108 @@ TEST_F(MemorySSATest, LoopMemorySSA) {
     auto* func = createLoopMemoryFunction();
     auto result = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
 
-    // Find the loop header
+    // Find all loop blocks
+    BasicBlock* entry = nullptr;
     BasicBlock* loop_header = nullptr;
+    BasicBlock* loop_body = nullptr;
+    BasicBlock* exit = nullptr;
+
     for (auto* block : *func) {
-        if (block->getName() == "loop_header") {
+        if (block->getName() == "entry") {
+            entry = block;
+        } else if (block->getName() == "loop_header") {
             loop_header = block;
-            break;
+        } else if (block->getName() == "loop_body") {
+            loop_body = block;
+        } else if (block->getName() == "exit") {
+            exit = block;
         }
     }
+
+    ASSERT_NE(entry, nullptr);
     ASSERT_NE(loop_header, nullptr);
+    ASSERT_NE(loop_body, nullptr);
+    ASSERT_NE(exit, nullptr);
 
-    // Check if a memory phi was inserted in the loop header
-    auto* memPhi = result->getMemoryPhi(loop_header);
-    if (memPhi != nullptr) {
-        EXPECT_TRUE(isa<MemoryPhi>(memPhi));
+    // Find memory operations
+    StoreInst* entryStore = nullptr;
+    LoadInst* headerLoad = nullptr;
+    StoreInst* bodyStore = nullptr;
+    LoadInst* exitLoad = nullptr;
 
-        // The phi should have incoming values from entry and loop body
-        EXPECT_GE(memPhi->getNumIncomingValues(), 1u);
-
-        // Verify that all incoming values are valid
-        for (unsigned i = 0; i < memPhi->getNumIncomingValues(); ++i) {
-            EXPECT_NE(memPhi->getIncomingValue(i), nullptr);
-            EXPECT_NE(memPhi->getIncomingBlock(i), nullptr);
+    for (auto* inst : *entry) {
+        if (auto* store = dyn_cast<StoreInst>(inst)) {
+            entryStore = store;
         }
     }
+    for (auto* inst : *loop_header) {
+        if (auto* load = dyn_cast<LoadInst>(inst)) {
+            headerLoad = load;
+        }
+    }
+    for (auto* inst : *loop_body) {
+        if (auto* store = dyn_cast<StoreInst>(inst)) {
+            bodyStore = store;
+        }
+    }
+    for (auto* inst : *exit) {
+        if (auto* load = dyn_cast<LoadInst>(inst)) {
+            exitLoad = load;
+        }
+    }
+
+    ASSERT_NE(entryStore, nullptr);
+    ASSERT_NE(headerLoad, nullptr);
+    ASSERT_NE(bodyStore, nullptr);
+    ASSERT_NE(exitLoad, nullptr);
+
+    // Verify memory phi exists at loop header (merge point)
+    auto* memPhi = result->getMemoryPhi(loop_header);
+    ASSERT_NE(memPhi, nullptr)
+        << "Loop header should have memory phi due to back edge from loop body";
+
+    // Loop header has 2 predecessors: entry and loop_body
+    EXPECT_EQ(memPhi->getNumIncomingValues(), 2u)
+        << "Loop header phi should have 2 incoming values: from entry and loop "
+           "body";
+
+    // Get memory accesses
+    auto* entryStoreAccess = result->getMemoryAccess(entryStore);
+    auto* bodyStoreAccess = result->getMemoryAccess(bodyStore);
+    auto* headerLoadAccess = result->getMemoryAccess(headerLoad);
+    auto* exitLoadAccess = result->getMemoryAccess(exitLoad);
+
+    ASSERT_NE(entryStoreAccess, nullptr);
+    ASSERT_NE(bodyStoreAccess, nullptr);
+    ASSERT_NE(headerLoadAccess, nullptr);
+    ASSERT_NE(exitLoadAccess, nullptr);
+
+    // Verify phi operands
+    auto* entryValue = memPhi->getIncomingValueForBlock(entry);
+    auto* bodyValue = memPhi->getIncomingValueForBlock(loop_body);
+
+    EXPECT_EQ(entryValue, entryStoreAccess)
+        << "Entry store should provide initial value to loop phi";
+    EXPECT_EQ(bodyValue, bodyStoreAccess)
+        << "Loop body store should provide back-edge value to loop phi";
+
+    // Verify def-use relationships
+    auto* headerLoadUse = dyn_cast<MemoryUse>(headerLoadAccess);
+    ASSERT_NE(headerLoadUse, nullptr);
+
+    auto* exitLoadUse = dyn_cast<MemoryUse>(exitLoadAccess);
+    ASSERT_NE(exitLoadUse, nullptr);
+
+    // Header load should be defined by the memory phi (merges entry and loop
+    // body)
+    EXPECT_EQ(headerLoadUse->getDefiningAccess(), memPhi)
+        << "Header load should be defined by loop phi";
+
+    // Exit load should also be defined by the memory phi
+    // (no stores between header and exit)
+    EXPECT_EQ(exitLoadUse->getDefiningAccess(), memPhi)
+        << "Exit load should be defined by loop phi (no stores between header "
+           "and exit)";
 
     EXPECT_TRUE(result->verify()) << "Loop memory SSA should be in valid form";
 }
@@ -756,27 +999,71 @@ TEST_F(MemorySSATest, MemoryAccessKinds) {
         }
     }
 
+    ASSERT_NE(alloca, nullptr);
+    ASSERT_NE(store, nullptr);
+    ASSERT_NE(load, nullptr);
+
     auto* allocaAccess = result->getMemoryAccess(alloca);
     auto* storeAccess = result->getMemoryAccess(store);
     auto* loadAccess = result->getMemoryAccess(load);
+    auto* liveOnEntry = result->getLiveOnEntry();
 
-    // Test kind checks
+    ASSERT_NE(allocaAccess, nullptr);
+    ASSERT_NE(storeAccess, nullptr);
+    ASSERT_NE(loadAccess, nullptr);
+    ASSERT_NE(liveOnEntry, nullptr);
+
+    // Test alloca access kind (MemoryDef)
+    EXPECT_EQ(allocaAccess->getKind(), MemoryAccess::MemoryDefKind);
     EXPECT_TRUE(allocaAccess->isMemoryDef());
     EXPECT_FALSE(allocaAccess->isMemoryUse());
     EXPECT_FALSE(allocaAccess->isMemoryPhi());
+    EXPECT_TRUE(isa<MemoryDef>(allocaAccess));
+    EXPECT_FALSE(isa<MemoryUse>(allocaAccess));
+    EXPECT_FALSE(isa<MemoryPhi>(allocaAccess));
 
+    // Test store access kind (MemoryDef)
+    EXPECT_EQ(storeAccess->getKind(), MemoryAccess::MemoryDefKind);
     EXPECT_TRUE(storeAccess->isMemoryDef());
     EXPECT_FALSE(storeAccess->isMemoryUse());
     EXPECT_FALSE(storeAccess->isMemoryPhi());
+    EXPECT_TRUE(isa<MemoryDef>(storeAccess));
+    EXPECT_FALSE(isa<MemoryUse>(storeAccess));
+    EXPECT_FALSE(isa<MemoryPhi>(storeAccess));
 
+    // Test load access kind (MemoryUse)
+    EXPECT_EQ(loadAccess->getKind(), MemoryAccess::MemoryUseKind);
     EXPECT_FALSE(loadAccess->isMemoryDef());
     EXPECT_TRUE(loadAccess->isMemoryUse());
     EXPECT_FALSE(loadAccess->isMemoryPhi());
+    EXPECT_FALSE(isa<MemoryDef>(loadAccess));
+    EXPECT_TRUE(isa<MemoryUse>(loadAccess));
+    EXPECT_FALSE(isa<MemoryPhi>(loadAccess));
 
-    // Test getKind()
-    EXPECT_EQ(allocaAccess->getKind(), MemoryAccess::MemoryDefKind);
-    EXPECT_EQ(storeAccess->getKind(), MemoryAccess::MemoryDefKind);
-    EXPECT_EQ(loadAccess->getKind(), MemoryAccess::MemoryUseKind);
+    // Test live-on-entry kind (MemoryDef)
+    EXPECT_EQ(liveOnEntry->getKind(), MemoryAccess::MemoryDefKind);
+    EXPECT_TRUE(liveOnEntry->isMemoryDef());
+    EXPECT_FALSE(liveOnEntry->isMemoryUse());
+    EXPECT_FALSE(liveOnEntry->isMemoryPhi());
+    EXPECT_TRUE(isa<MemoryDef>(liveOnEntry));
+    EXPECT_FALSE(isa<MemoryUse>(liveOnEntry));
+    EXPECT_FALSE(isa<MemoryPhi>(liveOnEntry));
+
+    // Verify dynamic casting works correctly
+    auto* allocaDef = dyn_cast<MemoryDef>(allocaAccess);
+    auto* storeDef = dyn_cast<MemoryDef>(storeAccess);
+    auto* loadUse = dyn_cast<MemoryUse>(loadAccess);
+    auto* liveOnEntryDef = dyn_cast<MemoryDef>(liveOnEntry);
+
+    EXPECT_NE(allocaDef, nullptr);
+    EXPECT_NE(storeDef, nullptr);
+    EXPECT_NE(loadUse, nullptr);
+    EXPECT_NE(liveOnEntryDef, nullptr);
+
+    EXPECT_EQ(dyn_cast<MemoryUse>(allocaAccess), nullptr);
+    EXPECT_EQ(dyn_cast<MemoryUse>(storeAccess), nullptr);
+    EXPECT_EQ(dyn_cast<MemoryDef>(loadAccess), nullptr);
+    EXPECT_EQ(dyn_cast<MemoryPhi>(loadAccess), nullptr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -787,28 +1074,66 @@ TEST_F(MemorySSATest, MemoryAccessIDs) {
     auto* func = createSimpleMemoryFunction();
     auto result = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
 
-    std::vector<MemoryAccess*> accesses;
+    // Find instructions
+    AllocaInst* alloca = nullptr;
+    StoreInst* store = nullptr;
+    LoadInst* load = nullptr;
 
-    // Collect all memory accesses
-    for (auto* block : *func) {
-        for (auto* inst : *block) {
-            auto* access = result->getMemoryAccess(inst);
-            if (access) {
-                accesses.push_back(access);
-            }
+    for (auto* inst : func->getEntryBlock()) {
+        if (auto* allocaInst = dyn_cast<AllocaInst>(inst)) {
+            alloca = allocaInst;
+        } else if (auto* storeInst = dyn_cast<StoreInst>(inst)) {
+            store = storeInst;
+        } else if (auto* loadInst = dyn_cast<LoadInst>(inst)) {
+            load = loadInst;
         }
     }
 
-    // Add live-on-entry
-    accesses.push_back(result->getLiveOnEntry());
+    ASSERT_NE(alloca, nullptr);
+    ASSERT_NE(store, nullptr);
+    ASSERT_NE(load, nullptr);
 
-    // Check that all IDs are unique
+    // Get memory accesses
+    auto* allocaAccess = result->getMemoryAccess(alloca);
+    auto* storeAccess = result->getMemoryAccess(store);
+    auto* loadAccess = result->getMemoryAccess(load);
+    auto* liveOnEntry = result->getLiveOnEntry();
+
+    ASSERT_NE(allocaAccess, nullptr);
+    ASSERT_NE(storeAccess, nullptr);
+    ASSERT_NE(loadAccess, nullptr);
+    ASSERT_NE(liveOnEntry, nullptr);
+
+    // Verify all IDs are unique
     std::set<unsigned> ids;
-    for (auto* access : accesses) {
+    std::vector<MemoryAccess*> allAccesses = {liveOnEntry, allocaAccess,
+                                              storeAccess, loadAccess};
+
+    for (auto* access : allAccesses) {
         unsigned id = access->getID();
-        EXPECT_TRUE(ids.find(id) == ids.end()) << "Duplicate ID found: " << id;
-        ids.insert(id);
+        EXPECT_TRUE(ids.insert(id).second) << "Duplicate ID found: " << id;
     }
+
+    // Verify IDs increase in allocation order (implementation detail but useful
+    // to check)
+    EXPECT_LT(liveOnEntry->getID(), allocaAccess->getID())
+        << "Live-on-entry should have smaller ID than alloca";
+    EXPECT_LT(allocaAccess->getID(), storeAccess->getID())
+        << "Alloca should have smaller ID than store";
+    EXPECT_LT(storeAccess->getID(), loadAccess->getID())
+        << "Store should have smaller ID than load";
+
+    // Verify access count matches expected
+    EXPECT_EQ(result->getMemoryAccesses().size(), 3u)
+        << "Should have exactly 3 memory accesses (alloca, store, load)";
+
+    // Verify memory access map completeness
+    EXPECT_EQ(result->getMemoryAccesses().count(alloca), 1u);
+    EXPECT_EQ(result->getMemoryAccesses().count(store), 1u);
+    EXPECT_EQ(result->getMemoryAccesses().count(load), 1u);
+    EXPECT_EQ(result->getMemoryAccesses().at(alloca), allocaAccess);
+    EXPECT_EQ(result->getMemoryAccesses().at(store), storeAccess);
+    EXPECT_EQ(result->getMemoryAccesses().at(load), loadAccess);
 }
 
 //===----------------------------------------------------------------------===//
@@ -845,7 +1170,8 @@ TEST_F(MemorySSATest, MemorySSAAnalysisStaticRun) {
     auto result = MemorySSAAnalysis::run(*func, *am);
     ASSERT_NE(result, nullptr);
 
-    EXPECT_TRUE(result->verify()) << "Static analysis method should produce valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Static analysis method should produce valid Memory SSA";
     EXPECT_EQ(result->getFunction(), func);
 }
 
@@ -911,8 +1237,9 @@ TEST_F(MemorySSATest, ComplexControlFlow) {
     builder->createRet(result);
 
     auto mssa = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
-    // Memory SSA should be in valid form  
-    EXPECT_TRUE(mssa->verify()) << "Complex CFG should produce valid Memory SSA";
+    // Memory SSA should be in valid form
+    EXPECT_TRUE(mssa->verify())
+        << "Complex CFG should produce valid Memory SSA";
 
     // Check that memory phis were inserted where needed
     auto* merge1Phi = mssa->getMemoryPhi(merge1);
@@ -940,7 +1267,8 @@ TEST_F(MemorySSATest, EmptyFunction) {
 
     auto result = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
     // Memory SSA should be in valid form
-    EXPECT_TRUE(result->verify()) << "Empty function should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Empty function should have valid Memory SSA";
 
     // Should still have live-on-entry
     EXPECT_NE(result->getLiveOnEntry(), nullptr);
@@ -963,7 +1291,8 @@ TEST_F(MemorySSATest, SingleBlockNoMemory) {
 
     auto mssa = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
     // Memory SSA should be in valid form
-    EXPECT_TRUE(mssa->verify()) << "Function without memory ops should have valid Memory SSA";
+    EXPECT_TRUE(mssa->verify())
+        << "Function without memory ops should have valid Memory SSA";
 
     // Should have live-on-entry but no other memory accesses
     EXPECT_NE(mssa->getLiveOnEntry(), nullptr);
@@ -992,7 +1321,8 @@ TEST_F(MemorySSATest, FunctionWithOnlyAllocas) {
     builder->createRet(builder->getInt32(42));
 
     auto result = am->getAnalysis<MemorySSA>("MemorySSAAnalysis", *func);
-    EXPECT_TRUE(result->verify()) << "Function with only allocas should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Function with only allocas should have valid Memory SSA";
 
     // Should have memory accesses for allocas
     EXPECT_NE(result->getMemoryAccess(alloca1), nullptr);
@@ -1057,7 +1387,8 @@ TEST_F(MemorySSATest, VeryLargeBasicBlock) {
         EXPECT_NE(result->getMemoryAccess(loads[i]), nullptr);
     }
 
-    EXPECT_TRUE(result->verify()) << "Large basic block should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Large basic block should have valid Memory SSA";
 }
 
 TEST_F(MemorySSATest, DeepControlFlowGraph) {
@@ -1197,7 +1528,8 @@ TEST_F(MemorySSATest, ComplexPhiNodeScenarios) {
         EXPECT_GE(phi2->getNumIncomingValues(), 1u);
     }
 
-    EXPECT_TRUE(result->verify()) << "Complex phi scenarios should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Complex phi scenarios should have valid Memory SSA";
 }
 
 TEST_F(MemorySSATest, CyclesInMemoryDependencies) {
@@ -1255,7 +1587,8 @@ TEST_F(MemorySSATest, CyclesInMemoryDependencies) {
     EXPECT_NE(result->getMemoryAccess(load2), nullptr);
     EXPECT_NE(result->getMemoryAccess(load3), nullptr);
 
-    EXPECT_TRUE(result->verify()) << "Cyclic dependencies should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Cyclic dependencies should have valid Memory SSA";
 }
 
 TEST_F(MemorySSATest, NullPointerRobustness) {
@@ -1279,7 +1612,8 @@ TEST_F(MemorySSATest, NullPointerRobustness) {
     EXPECT_NE(result, nullptr);
     EXPECT_NE(result->getMemoryAccess(load), nullptr);
 
-    EXPECT_TRUE(result->verify()) << "Null pointer operations should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Null pointer operations should have valid Memory SSA";
 }
 
 TEST_F(MemorySSATest, ManyMemoryPhis) {
@@ -1353,7 +1687,8 @@ TEST_F(MemorySSATest, ManyMemoryPhis) {
                   static_cast<unsigned>(maxCascade + 1));
     }
 
-    EXPECT_TRUE(result->verify()) << "Many memory phis should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Many memory phis should have valid Memory SSA";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1407,7 +1742,8 @@ TEST_F(MemorySSATest, LongMemoryDependencyChains) {
     size_t expectedCount = chainLength + stores.size() + loads.size() + 2;
     EXPECT_EQ(result->getMemoryAccesses().size(), expectedCount);
 
-    EXPECT_TRUE(result->verify()) << "Long dependency chains should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Long dependency chains should have valid Memory SSA";
 }
 
 TEST_F(MemorySSATest, MemorySSAWithUnreachableCode) {
@@ -1460,7 +1796,8 @@ TEST_F(MemorySSATest, MemorySSAWithUnreachableCode) {
 
     // Unreachable code processing is implementation-defined
     // We just verify the analysis completes without errors
-    EXPECT_TRUE(result->verify()) << "Unreachable code should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Unreachable code should have valid Memory SSA";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1481,7 +1818,8 @@ TEST_F(MemorySSATest, ComprehensiveMemorySSAValidation) {
     auto* exit = BasicBlock::Create(context.get(), "exit", func);
 
     builder->setInsertPoint(entry);
-    auto* shared_array = builder->createAlloca(int32Ty, builder->getInt32(10), "shared_array");
+    auto* shared_array =
+        builder->createAlloca(int32Ty, builder->getInt32(10), "shared_array");
     auto* counter = builder->createAlloca(int32Ty, nullptr, "counter");
     builder->createStore(func->getArg(0), counter);
     builder->createBr(loop);
@@ -1489,7 +1827,8 @@ TEST_F(MemorySSATest, ComprehensiveMemorySSAValidation) {
     // Loop with memory operations and control flow
     builder->setInsertPoint(loop);
     auto* count_val = builder->createLoad(counter, "count_val");
-    auto* loop_cond = builder->createICmpSGT(count_val, builder->getInt32(0), "loop_cond");
+    auto* loop_cond =
+        builder->createICmpSGT(count_val, builder->getInt32(0), "loop_cond");
     builder->createCondBr(loop_cond, then_bb, exit);
 
     // Then branch - store to array
@@ -1497,19 +1836,22 @@ TEST_F(MemorySSATest, ComprehensiveMemorySSAValidation) {
     auto* idx = builder->createRem(count_val, builder->getInt32(10), "idx");
     auto* gep = builder->createGEP(shared_array, idx, "array_ptr");
     builder->createStore(func->getArg(1), gep);
-    auto* cond = builder->createICmpEQ(idx, builder->getInt32(5), "branch_cond");
+    auto* cond =
+        builder->createICmpEQ(idx, builder->getInt32(5), "branch_cond");
     builder->createCondBr(cond, else_bb, merge);
 
     // Else branch - load from array
     builder->setInsertPoint(else_bb);
     auto* load_val = builder->createLoad(gep, "load_val");
-    // Use the loaded value in a dummy operation to avoid unused variable warning
+    // Use the loaded value in a dummy operation to avoid unused variable
+    // warning
     builder->createAdd(load_val, builder->getInt32(0), "dummy_use");
     builder->createBr(merge);
 
     // Merge
     builder->setInsertPoint(merge);
-    auto* dec_count = builder->createSub(count_val, builder->getInt32(1), "dec_count");
+    auto* dec_count =
+        builder->createSub(count_val, builder->getInt32(1), "dec_count");
     builder->createStore(dec_count, counter);
     builder->createBr(loop);
 
@@ -1522,21 +1864,25 @@ TEST_F(MemorySSATest, ComprehensiveMemorySSAValidation) {
     ASSERT_NE(result, nullptr);
 
     // Validate comprehensive Memory SSA properties
-    EXPECT_TRUE(result->verify()) << "Comprehensive test should have valid Memory SSA";
+    EXPECT_TRUE(result->verify())
+        << "Comprehensive test should have valid Memory SSA";
 
     // Check all memory instructions have accesses
     unsigned memoryInstrCount = 0;
     for (auto* block : *func) {
         for (auto* inst : *block) {
-            if (isa<AllocaInst>(inst) || isa<LoadInst>(inst) || isa<StoreInst>(inst)) {
+            if (isa<AllocaInst>(inst) || isa<LoadInst>(inst) ||
+                isa<StoreInst>(inst)) {
                 auto* access = result->getMemoryAccess(inst);
-                EXPECT_NE(access, nullptr) << "All memory instructions should have accesses";
-                EXPECT_EQ(access->getBlock(), block) << "Access should be in correct block";
+                EXPECT_NE(access, nullptr)
+                    << "All memory instructions should have accesses";
+                EXPECT_EQ(access->getBlock(), block)
+                    << "Access should be in correct block";
                 memoryInstrCount++;
             }
         }
     }
-    
+
     EXPECT_EQ(result->getMemoryAccesses().size(), memoryInstrCount)
         << "Access map should contain all memory instructions";
 
@@ -1560,9 +1906,10 @@ TEST_F(MemorySSATest, ComprehensiveMemorySSAValidation) {
     // Test clobbering relationships in complex CFG
     auto* finalLoadAccess = result->getMemoryAccess(final_load);
     ASSERT_NE(finalLoadAccess, nullptr);
-    
+
     auto* finalClobber = result->getClobberingMemoryAccess(finalLoadAccess);
-    EXPECT_NE(finalClobber, nullptr) << "Final load should have a clobbering access";
+    EXPECT_NE(finalClobber, nullptr)
+        << "Final load should have a clobbering access";
 
     // Verify live-on-entry properties
     auto* liveOnEntry = result->getLiveOnEntry();
@@ -1574,17 +1921,19 @@ TEST_F(MemorySSATest, ComprehensiveMemorySSAValidation) {
     std::set<unsigned> allIds;
     for (const auto& [inst, access] : result->getMemoryAccesses()) {
         unsigned id = access->getID();
-        EXPECT_TRUE(allIds.insert(id).second) << "All access IDs should be unique";
+        EXPECT_TRUE(allIds.insert(id).second)
+            << "All access IDs should be unique";
     }
-    
+
     // Include phis and live-on-entry in ID check
     for (const auto& [block, phi] : result->getMemoryPhis()) {
         unsigned id = phi->getID();
         EXPECT_TRUE(allIds.insert(id).second) << "Phi IDs should be unique";
     }
-    
+
     unsigned liveOnEntryId = liveOnEntry->getID();
-    EXPECT_TRUE(allIds.insert(liveOnEntryId).second) << "Live-on-entry ID should be unique";
+    EXPECT_TRUE(allIds.insert(liveOnEntryId).second)
+        << "Live-on-entry ID should be unique";
 }
 
 }  // namespace

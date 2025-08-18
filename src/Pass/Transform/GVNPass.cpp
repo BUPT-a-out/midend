@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <iostream>
+#include <queue>
+#include <unordered_set>
 
 #include "IR/BasicBlock.h"
 #include "IR/Constant.h"
@@ -886,7 +888,20 @@ Value* GVNPass::findAvailableLoadWithMSSA(LoadInst* LI) {
                 if (AA->alias(LI->getPointerOperand(),
                               SI->getPointerOperand()) ==
                     AliasAnalysis::AliasResult::MustAlias) {
-                    return SI->getValueOperand();
+                    Value* storeValue = SI->getValueOperand();
+
+                    // Check if the stored value would create a circular
+                    // reference
+                    if (auto* storeInst = dyn_cast<Instruction>(storeValue)) {
+                        // Check if the stored instruction uses this load
+                        // (directly or indirectly) If so, we have a circular
+                        // dependency and need a phi node instead
+                        if (instructionDependsOnLoad(storeInst, LI)) {
+                            goto try_predecessors;
+                        }
+                    }
+
+                    return storeValue;
                 }
             }
             // If the clobber is another load from the same location
@@ -901,6 +916,7 @@ Value* GVNPass::findAvailableLoadWithMSSA(LoadInst* LI) {
         }
     }
 
+try_predecessors:
     // Try to find value in predecessors
     return findLoadValueInPredecessors(LI, LI->getParent());
 }
@@ -982,7 +998,18 @@ std::vector<GVNPass::LoadValueInfo> GVNPass::collectLoadValuesFromPredecessors(
                 if (AA->alias(LI->getPointerOperand(),
                               SI->getPointerOperand()) ==
                     AliasAnalysis::AliasResult::MustAlias) {
-                    info.value = SI->getValueOperand();
+                    Value* storeValue = SI->getValueOperand();
+
+                    // Check for circular dependency: if the stored value
+                    // depends on this load
+                    if (auto* storeInst = dyn_cast<Instruction>(storeValue)) {
+                        if (instructionDependsOnLoad(storeInst, LI)) {
+                            // Skip this store to avoid circular dependency
+                            continue;
+                        }
+                    }
+
+                    info.value = storeValue;
                     info.isValid = true;
                     break;
                 }
@@ -1082,6 +1109,42 @@ Value* GVNPass::insertPhiForLoadValue(
     }
 
     return phi;
+}
+
+bool GVNPass::instructionDependsOnLoad(Instruction* Inst, LoadInst* Load) {
+    if (!Inst || !Load) return false;
+    if (Inst == Load) return true;
+
+    // Use a work list to avoid recursion and track visited instructions
+    std::unordered_set<Instruction*> visited;
+    std::queue<Instruction*> worklist;
+    worklist.push(Inst);
+    visited.insert(Inst);
+
+    while (!worklist.empty()) {
+        Instruction* current = worklist.front();
+        worklist.pop();
+
+        // Check if this instruction directly uses the load
+        for (unsigned i = 0; i < current->getNumOperands(); ++i) {
+            Value* operand = current->getOperand(i);
+            if (operand == Load) {
+                return true;
+            }
+
+            // If operand is an instruction in the same block, add it to
+            // worklist
+            if (auto* OpInst = dyn_cast<Instruction>(operand)) {
+                if (OpInst->getParent() == Load->getParent() &&
+                    visited.find(OpInst) == visited.end()) {
+                    visited.insert(OpInst);
+                    worklist.push(OpInst);
+                }
+            }
+        }
+    }
+
+    return false;
 }
 
 unsigned GVNPass::getMemoryStateValueNumber(MemoryAccess* access) {

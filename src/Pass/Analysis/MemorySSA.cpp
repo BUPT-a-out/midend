@@ -148,6 +148,22 @@ bool CachingWalker::clobbers(MemoryAccess* access, Instruction* inst) {
 
         // Use alias analysis to check if they may alias
         if (aliasAnalysis_) {
+            // Alloca instructions clobber any memory operation using their
+            // result
+            if (auto* alloca = dyn_cast<AllocaInst>(defInst)) {
+                if (auto* load = dyn_cast<LoadInst>(inst)) {
+                    auto aliasResult =
+                        const_cast<AliasAnalysis::Result*>(aliasAnalysis_)
+                            ->alias(alloca, load->getPointerOperand());
+                    return aliasResult != AliasAnalysis::AliasResult::NoAlias;
+                } else if (auto* store = dyn_cast<StoreInst>(inst)) {
+                    auto aliasResult =
+                        const_cast<AliasAnalysis::Result*>(aliasAnalysis_)
+                            ->alias(alloca, store->getPointerOperand());
+                    return aliasResult != AliasAnalysis::AliasResult::NoAlias;
+                }
+            }
+
             // For stores and loads, check if they may alias
             if (auto* store = dyn_cast<StoreInst>(defInst)) {
                 if (auto* load = dyn_cast<LoadInst>(inst)) {
@@ -162,7 +178,16 @@ bool CachingWalker::clobbers(MemoryAccess* access, Instruction* inst) {
                             ->alias(store->getPointerOperand(),
                                     storeInst->getPointerOperand());
                     return aliasResult != AliasAnalysis::AliasResult::NoAlias;
+                } else if (isa<CallInst>(inst)) {
+                    // Stores clobber function calls (conservative)
+                    return true;
                 }
+            }
+
+            // Other memory definitions also clobber function calls
+            if (isa<CallInst>(inst) &&
+                (isa<AllocaInst>(defInst) || isa<StoreInst>(defInst))) {
+                return true;
             }
 
             // Function calls conservatively clobber everything
@@ -219,7 +244,8 @@ MemoryAccess* MemorySSA::getClobberingMemoryAccess(Instruction* inst) {
     if (!startAccess) {
         return nullptr;
     }
-    return walker_->getClobberingMemoryAccess(inst, startAccess);
+    // Should behave the same as getClobberingMemoryAccess(startAccess)
+    return getClobberingMemoryAccess(startAccess);
 }
 
 void MemorySSA::buildMemorySSA() {
@@ -294,11 +320,19 @@ void MemorySSA::renameMemoryAccesses() {
     // Initialize with live-on-entry
     blockLastDef_[&function_->getEntryBlock()] = liveOnEntry_.get();
 
-    // First pass: Process all blocks to create memory accesses
-    std::function<void(BasicBlock*, std::unordered_set<BasicBlock*>&)> processBlock;
-    processBlock = [&](BasicBlock* block, std::unordered_set<BasicBlock*>& visited) {
+    // First pass: Create memory accesses for all instructions
+    // Use a worklist to process blocks in the right order
+    std::queue<BasicBlock*> worklist;
+    std::unordered_set<BasicBlock*> visited;
+
+    worklist.push(&function_->getEntryBlock());
+
+    while (!worklist.empty()) {
+        BasicBlock* block = worklist.front();
+        worklist.pop();
+
         if (visited.count(block)) {
-            return;
+            continue;
         }
         visited.insert(block);
 
@@ -313,11 +347,9 @@ void MemorySSA::renameMemoryAccesses() {
                     currentDef = predIt->second;
                 }
             } else if (preds.size() > 1) {
-                // Use the phi node if it exists
-                MemoryPhi* phi = getMemoryPhi(block);
-                if (phi) {
-                    currentDef = phi;
-                }
+                // Multiple predecessors - will be handled by phi nodes
+                // For now, use live-on-entry and let phi filling fix this
+                currentDef = liveOnEntry_.get();
             }
 
             if (!currentDef) {
@@ -341,26 +373,84 @@ void MemorySSA::renameMemoryAccesses() {
             }
         }
 
-        // Process successors
+        // Add successors to worklist
         for (BasicBlock* succ : block->getSuccessors()) {
-            // Set initial def for successor if not set
-            if (blockLastDef_.find(succ) == blockLastDef_.end()) {
-                blockLastDef_[succ] = currentDef;
+            if (!visited.count(succ)) {
+                // Set initial def for successor if not set
+                if (blockLastDef_.find(succ) == blockLastDef_.end()) {
+                    blockLastDef_[succ] = currentDef;
+                }
+                worklist.push(succ);
             }
-            processBlock(succ, visited);
         }
-    };
-
-    std::unordered_set<BasicBlock*> visited;
-    processBlock(&function_->getEntryBlock(), visited);
+    }
 
     // Second pass: Fill in phi node operands
     for (const auto& [block, phi] : memoryPhis_) {
         const auto& preds = block->getPredecessors();
         for (BasicBlock* pred : preds) {
             auto it = blockLastDef_.find(pred);
-            MemoryAccess* predDef = (it != blockLastDef_.end()) ? it->second : liveOnEntry_.get();
+            MemoryAccess* predDef =
+                (it != blockLastDef_.end()) ? it->second : liveOnEntry_.get();
             phi->addIncoming(predDef, pred);
+        }
+    }
+
+    // Third pass: Fix uses in blocks with memory phis and their successors
+    for (const auto& [block, phi] : memoryPhis_) {
+        // Update all memory uses in this block to use the phi as their defining
+        // access
+        MemoryAccess* currentDef = phi;
+        for (auto* inst : *block) {
+            if (auto* memAccess = getMemoryAccess(inst)) {
+                if (auto* memUse = dyn_cast<MemoryUse>(memAccess)) {
+                    // Memory uses in phi blocks should use the phi
+                    memUse->setDefiningAccess(currentDef);
+                } else if (auto* memDef = dyn_cast<MemoryDef>(memAccess)) {
+                    // Update currentDef for subsequent uses
+                    currentDef = memDef;
+                }
+            }
+        }
+
+        // Update blockLastDef to reflect the phi
+        if (currentDef == phi) {
+            blockLastDef_[block] = phi;
+        } else {
+            blockLastDef_[block] = currentDef;
+        }
+    }
+
+    // Fourth pass: Propagate memory state from phi blocks to successors
+    for (const auto& [block, phi] : memoryPhis_) {
+        MemoryAccess* finalDef = blockLastDef_[block];
+        for (BasicBlock* succ : block->getSuccessors()) {
+            const auto& preds = succ->getPredecessors();
+            if (preds.size() == 1 && preds[0] == block) {
+                // Single predecessor that has a phi - update successor's uses
+                for (auto* inst : *succ) {
+                    if (auto* memAccess = getMemoryAccess(inst)) {
+                        if (auto* memUse = dyn_cast<MemoryUse>(memAccess)) {
+                            // Check if this use doesn't have a defining def in
+                            // the same block
+                            bool hasDefInBlock = false;
+                            for (auto* prevInst : *succ) {
+                                if (prevInst == inst) break;
+                                if (auto* prevAccess =
+                                        getMemoryAccess(prevInst)) {
+                                    if (isa<MemoryDef>(prevAccess)) {
+                                        hasDefInBlock = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!hasDefInBlock) {
+                                memUse->setDefiningAccess(finalDef);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -443,16 +533,17 @@ void MemorySSA::print() const {
 bool MemorySSA::verify() const {
     // Basic verification of Memory SSA invariants
 
-    // 1. Every memory instruction in reachable blocks should have a corresponding memory access
+    // 1. Every memory instruction in reachable blocks should have a
+    // corresponding memory access
     std::unordered_set<BasicBlock*> reachable;
     std::queue<BasicBlock*> worklist;
     worklist.push(&function_->getEntryBlock());
     reachable.insert(&function_->getEntryBlock());
-    
+
     while (!worklist.empty()) {
         BasicBlock* block = worklist.front();
         worklist.pop();
-        
+
         for (BasicBlock* succ : block->getSuccessors()) {
             if (reachable.insert(succ).second) {
                 worklist.push(succ);
@@ -462,9 +553,9 @@ bool MemorySSA::verify() const {
 
     for (auto* block : *function_) {
         if (!reachable.count(block)) {
-            continue; // Skip unreachable blocks
+            continue;  // Skip unreachable blocks
         }
-        
+
         for (auto* inst : *block) {
             if (isMemoryOperation(inst)) {
                 if (!getMemoryAccess(inst)) {
