@@ -8,7 +8,6 @@
 #include "IR/BasicBlock.h"
 #include "IR/Function.h"
 #include "IR/Instruction.h"
-#include "IR/Instructions/MemoryOps.h"
 #include "IR/Instructions/OtherOps.h"
 #include "Pass/Analysis/AliasAnalysis.h"
 #include "Pass/Analysis/DominanceInfo.h"
