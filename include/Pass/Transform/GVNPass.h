@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "IR/Instructions/MemoryOps.h"
 #include "Pass/Analysis/AliasAnalysis.h"
 #include "Pass/Analysis/MemorySSA.h"
 #include "Pass/Pass.h"

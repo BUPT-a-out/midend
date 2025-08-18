@@ -294,18 +294,11 @@ void MemorySSA::renameMemoryAccesses() {
     // Initialize with live-on-entry
     blockLastDef_[&function_->getEntryBlock()] = liveOnEntry_.get();
 
-    // Perform a depth-first traversal to rename memory accesses
-    std::vector<BasicBlock*> visitStack;
-    std::unordered_set<BasicBlock*> visited;
-
-    visitStack.push_back(&function_->getEntryBlock());
-
-    while (!visitStack.empty()) {
-        BasicBlock* block = visitStack.back();
-        visitStack.pop_back();
-
+    // First pass: Process all blocks to create memory accesses
+    std::function<void(BasicBlock*, std::unordered_set<BasicBlock*>&)> processBlock;
+    processBlock = [&](BasicBlock* block, std::unordered_set<BasicBlock*>& visited) {
         if (visited.count(block)) {
-            continue;
+            return;
         }
         visited.insert(block);
 
@@ -315,7 +308,10 @@ void MemorySSA::renameMemoryAccesses() {
             // Find the defining access from predecessors
             const auto& preds = block->getPredecessors();
             if (preds.size() == 1) {
-                currentDef = blockLastDef_[preds[0]];
+                auto predIt = blockLastDef_.find(preds[0]);
+                if (predIt != blockLastDef_.end()) {
+                    currentDef = predIt->second;
+                }
             } else if (preds.size() > 1) {
                 // Use the phi node if it exists
                 MemoryPhi* phi = getMemoryPhi(block);
@@ -347,20 +343,24 @@ void MemorySSA::renameMemoryAccesses() {
 
         // Process successors
         for (BasicBlock* succ : block->getSuccessors()) {
-            if (!visited.count(succ)) {
-                visitStack.push_back(succ);
-
-                // Update phi nodes in successor
-                MemoryPhi* phi = getMemoryPhi(succ);
-                if (phi) {
-                    phi->addIncoming(currentDef, block);
-                }
-
-                // Set initial def for successor if not set
-                if (blockLastDef_.find(succ) == blockLastDef_.end()) {
-                    blockLastDef_[succ] = currentDef;
-                }
+            // Set initial def for successor if not set
+            if (blockLastDef_.find(succ) == blockLastDef_.end()) {
+                blockLastDef_[succ] = currentDef;
             }
+            processBlock(succ, visited);
+        }
+    };
+
+    std::unordered_set<BasicBlock*> visited;
+    processBlock(&function_->getEntryBlock(), visited);
+
+    // Second pass: Fill in phi node operands
+    for (const auto& [block, phi] : memoryPhis_) {
+        const auto& preds = block->getPredecessors();
+        for (BasicBlock* pred : preds) {
+            auto it = blockLastDef_.find(pred);
+            MemoryAccess* predDef = (it != blockLastDef_.end()) ? it->second : liveOnEntry_.get();
+            phi->addIncoming(predDef, pred);
         }
     }
 }
@@ -443,8 +443,28 @@ void MemorySSA::print() const {
 bool MemorySSA::verify() const {
     // Basic verification of Memory SSA invariants
 
-    // 1. Every memory instruction should have a corresponding memory access
+    // 1. Every memory instruction in reachable blocks should have a corresponding memory access
+    std::unordered_set<BasicBlock*> reachable;
+    std::queue<BasicBlock*> worklist;
+    worklist.push(&function_->getEntryBlock());
+    reachable.insert(&function_->getEntryBlock());
+    
+    while (!worklist.empty()) {
+        BasicBlock* block = worklist.front();
+        worklist.pop();
+        
+        for (BasicBlock* succ : block->getSuccessors()) {
+            if (reachable.insert(succ).second) {
+                worklist.push(succ);
+            }
+        }
+    }
+
     for (auto* block : *function_) {
+        if (!reachable.count(block)) {
+            continue; // Skip unreachable blocks
+        }
+        
         for (auto* inst : *block) {
             if (isMemoryOperation(inst)) {
                 if (!getMemoryAccess(inst)) {
