@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -30,6 +31,8 @@ class ConstantArray;
 
 class ComptimePass : public ModulePass {
    public:
+    using ValuePtr = std::shared_ptr<Value>;
+
     ComptimePass() : ModulePass("ComptimePass", "Compile-Time Evaluation") {}
 
     bool runOnModule(Module& module, AnalysisManager& am) override;
@@ -39,7 +42,7 @@ class ComptimePass : public ModulePass {
         std::unordered_set<std::string>& preserved) const override;
 
    private:
-    using ValueMap = ska::unordered_map<Value*, Value*>;
+    using ValueMap = ska::unordered_map<Value*, ValuePtr>;
     using RuntimeSet = ska::unordered_set<Value*>;
     using ComptimeSet = ska::unordered_set<Instruction*>;
     using VisitedSet = ska::unordered_set<BasicBlock*>;
@@ -54,8 +57,8 @@ class ComptimePass : public ModulePass {
     void initializeGlobalValueMap(Module& module);
 
     // Unified evaluation function - pass ComptimeSet as nullptr for propagation
-    std::pair<Value*, bool> evaluateFunction(
-        Function* func, const std::vector<Value*>& args, bool isMainFunction,
+    std::pair<ValuePtr, bool> evaluateFunction(
+        Function* func, const std::vector<ValuePtr>& args, bool isMainFunction,
         const ComptimeSet* comptimeSet, ValueMap& upperValueMap,
         const std::vector<Value*>& argsRef);
 
@@ -66,28 +69,29 @@ class ComptimePass : public ModulePass {
     void performRuntimePropagation(BasicBlock* startBlock, BasicBlock* endBlock,
                                    ValueMap& valueMap);
 
-    Value* evaluateAllocaInst(AllocaInst* alloca, ValueMap& valueMap);
-    Value* evaluateBinaryOp(BinaryOperator* binOp, ValueMap& valueMap);
-    Value* evaluateUnaryOp(UnaryOperator* unOp, ValueMap& valueMap);
-    Value* evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap);
-    Value* evaluateLoadInst(LoadInst* load, ValueMap& valueMap);
-    Value* evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
-                             bool skipSideEffect);
-    Value* evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap);
-    std::pair<Value*, bool> evaluateCallInst(CallInst* call, ValueMap& valueMap,
-                                             bool isMainFunction,
-                                             bool skipSideEffect);
-    Value* evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
+    ValuePtr evaluateAllocaInst(AllocaInst* alloca, ValueMap& valueMap);
+    ValuePtr evaluateBinaryOp(BinaryOperator* binOp, ValueMap& valueMap);
+    ValuePtr evaluateUnaryOp(UnaryOperator* unOp, ValueMap& valueMap);
+    ValuePtr evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap);
+    ValuePtr evaluateLoadInst(LoadInst* load, ValueMap& valueMap);
+    ValuePtr evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
+                               bool skipSideEffect);
+    ValuePtr evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap);
+    std::pair<ValuePtr, bool> evaluateCallInst(CallInst* call,
+                                               ValueMap& valueMap,
+                                               bool isMainFunction,
+                                               bool skipSideEffect);
+    ValuePtr evaluateCastInst(CastInst* castInst, ValueMap& valueMap);
 
     void markAsRuntime(Value* value, ValueMap& valueMap, bool no_gep = false);
     void invalidateValuesFromCall(CallInst* call, ValueMap& valueMap);
 
-    bool updateValueMap(Value* inst, Value* result, ValueMap& valueMap);
+    bool updateValueMap(Value* inst, ValuePtr result, ValueMap& valueMap);
 
     void handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
                         ValueMap& valueMap);
-    Value* evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
-                           ValueMap& valueMap);
+    ValuePtr evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
+                             ValueMap& valueMap);
 
     size_t eliminateComputedInstructions(Function* func);
     bool initializeValues(Module& module);
@@ -102,7 +106,7 @@ class ComptimePass : public ModulePass {
                             std::vector<std::pair<int, Constant*>>& indices,
                             bool onlyNonZero = false, int baseIndex = 0);
 
-    Value* getValueOrConstant(Value* v, ValueMap& valueMap);
+    ValuePtr getValueOrConstant(Value* v, ValueMap& valueMap);
 
     BasicBlock* getPostImmediateDominator(BasicBlock* block);
 };

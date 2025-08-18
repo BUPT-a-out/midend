@@ -1,14 +1,35 @@
 #include "IR/Constant.h"
 
+#include <functional>
 #include <map>
 #include <stdexcept>
 
+#include "flat_hash_map/unordered_map.hpp"
+
+namespace std {
+template <typename T1, typename T2>
+struct hash<std::pair<T1*, T2>> {
+    size_t operator()(const std::pair<T1*, T2>& p) const {
+        auto h1 = std::hash<void*>{}(p.first);
+        auto h2 = std::hash<T2>{}(p.second);
+        return h1 ^ (h2 << 1);
+    }
+};
+}  // namespace std
+
 namespace midend {
 
-static std::map<std::pair<IntegerType*, uint64_t>, ConstantInt*> integerCache;
-static std::map<std::pair<FloatType*, float>, ConstantFP*> fpCache;
-static std::map<PointerType*, ConstantPointerNull*> nullPtrCache;
-static std::map<Type*, UndefValue*> undefCache;
+static ska::unordered_map<std::pair<IntegerType*, uint64_t>, ConstantInt*>
+    integerCache;
+static ska::unordered_map<std::pair<IntegerType*, uint64_t>,
+                          std::shared_ptr<ConstantInt>>
+    sharedIntegerCache;
+static ska::unordered_map<std::pair<FloatType*, float>, ConstantFP*> fpCache;
+static ska::unordered_map<std::pair<FloatType*, float>,
+                          std::shared_ptr<ConstantFP>>
+    sharedFPCache;
+static ska::unordered_map<PointerType*, ConstantPointerNull*> nullPtrCache;
+static ska::unordered_map<Type*, UndefValue*> undefCache;
 
 ConstantInt* ConstantInt::get(IntegerType* ty, uint32_t val) {
     auto key = std::make_pair(ty, val);
@@ -21,6 +42,18 @@ ConstantInt* ConstantInt::get(IntegerType* ty, uint32_t val) {
     return constant;
 }
 
+std::shared_ptr<ConstantInt> ConstantInt::getShared(IntegerType* ty,
+                                                    uint32_t val) {
+    auto key = std::make_pair(ty, val);
+    auto it = sharedIntegerCache.find(key);
+    if (it != sharedIntegerCache.end()) {
+        return it->second;
+    }
+    auto* constant = new ConstantInt(ty, val);
+    sharedIntegerCache[key] = std::shared_ptr<ConstantInt>(constant);
+    return sharedIntegerCache[key];
+}
+
 ConstantInt* ConstantInt::get(Context* ctx, unsigned bitWidth, uint32_t val) {
     return get(ctx->getIntegerType(bitWidth), val);
 }
@@ -29,8 +62,16 @@ ConstantInt* ConstantInt::getTrue(Context* ctx) {
     return get(ctx->getInt1Type(), 1);
 }
 
+std::shared_ptr<ConstantInt> ConstantInt::getTrueShared(Context* ctx) {
+    return getShared(ctx->getInt1Type(), 1);
+}
+
 ConstantInt* ConstantInt::getFalse(Context* ctx) {
     return get(ctx->getInt1Type(), 0);
+}
+
+std::shared_ptr<ConstantInt> ConstantInt::getFalseShared(Context* ctx) {
+    return getShared(ctx->getInt1Type(), 0);
 }
 
 ConstantFP* ConstantFP::get(FloatType* ty, float val) {
@@ -42,6 +83,17 @@ ConstantFP* ConstantFP::get(FloatType* ty, float val) {
     auto* constant = new ConstantFP(ty, val);
     fpCache[key] = constant;
     return constant;
+}
+
+std::shared_ptr<ConstantFP> ConstantFP::getShared(FloatType* ty, float val) {
+    auto key = std::make_pair(ty, val);
+    auto it = sharedFPCache.find(key);
+    if (it != sharedFPCache.end()) {
+        return it->second;
+    }
+    auto* constant = new ConstantFP(ty, val);
+    sharedFPCache[key] = std::shared_ptr<ConstantFP>(constant);
+    return sharedFPCache[key];
 }
 
 ConstantFP* ConstantFP::get(Context* ctx, float val) {

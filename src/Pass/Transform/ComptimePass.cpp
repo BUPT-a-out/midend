@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <queue>
 
 // Debug output macro - only outputs when A_OUT_DEBUG is defined
@@ -27,6 +28,16 @@
 #include "Pass/Analysis/DominanceInfo.h"
 
 namespace midend {
+
+static ComptimePass::ValuePtr wrapValue(Value* v) {
+    if (!v) return nullptr;
+    return std::shared_ptr<Value>(v, [](Value*) {});
+}
+
+static ComptimePass::ValuePtr createManagedValue(Value* v) {
+    if (!v) return nullptr;
+    return std::shared_ptr<Value>(v);
+}
 
 void ComptimePass::getAnalysisUsage(
     std::unordered_set<std::string>& required,
@@ -223,19 +234,24 @@ void ComptimePass::initializeGlobalValueMap(Module& module) {
         if (gv->hasInitializer()) {
             auto* initializer = gv->getInitializer();
             if (auto* constArray = dyn_cast<ConstantArray>(initializer)) {
-                globalValueMap[gv] = flattenConstantArray(constArray);
+                // Don't delete ConstantArray as it may be referenced by
+                // ConstantGEP
+                globalValueMap[gv] =
+                    wrapValue(flattenConstantArray(constArray));
             } else {
-                globalValueMap[gv] = initializer;
+                globalValueMap[gv] = wrapValue(initializer);
             }
         } else {
             Type* valueType = gv->getValueType();
-            globalValueMap[gv] = createZeroInitializedConstant(valueType);
+            Constant* zeroInit = createZeroInitializedConstant(valueType);
+            // Don't delete any Constants as they may be referenced elsewhere
+            globalValueMap[gv] = wrapValue(zeroInit);
         }
     }
 }
 
-std::pair<Value*, bool> ComptimePass::evaluateFunction(
-    Function* func, const std::vector<Value*>& args, bool isMainFunction,
+std::pair<ComptimePass::ValuePtr, bool> ComptimePass::evaluateFunction(
+    Function* func, const std::vector<ValuePtr>& args, bool isMainFunction,
     const ComptimeSet* comptimeSet, ValueMap& upperValueMap,
     const std::vector<Value*>& argsRef) {
     if (func->isDeclaration()) {
@@ -251,12 +267,12 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
     for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
         valueMap[func->getArg(i)] = args[i];
         DEBUG_OUT() << "[DEBUG] init func arg " << func->getArg(i)->getName()
-                    << " = " << IRPrinter::toString(args[i]) << std::endl;
+                    << " = " << IRPrinter::toString(args[i].get()) << std::endl;
     }
 
     BasicBlock* currentBlock = &func->getEntryBlock();
     BasicBlock* prevBlock = nullptr;
-    Value* returnValue = nullptr;
+    ValuePtr returnValue = nullptr;
 
     // Simulate execution through the function
     while (currentBlock) {
@@ -274,15 +290,17 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
             if (retVal) {
                 returnValue = getValueOrConstant(retVal, valueMap);
             } else {
-                returnValue = UndefValue::get(func->getReturnType());
+                returnValue = wrapValue(UndefValue::get(func->getReturnType()));
             }
             break;
         } else if (auto* br = dyn_cast<BranchInst>(terminator)) {
             prevBlock = currentBlock;
 
             if (br->isConditional()) {
-                Value* cond = getValueOrConstant(br->getCondition(), valueMap);
-                if (auto* constCond = dyn_cast<ConstantInt>(cond)) {
+                ValuePtr cond =
+                    getValueOrConstant(br->getCondition(), valueMap);
+                if (cond && isa<ConstantInt>(cond.get())) {
+                    auto* constCond = cast<ConstantInt>(cond.get());
                     // Compile-time known condition
                     currentBlock = constCond->getValue() ? br->getTrueBB()
                                                          : br->getFalseBB();
@@ -309,10 +327,11 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
         }
     }
 
-    DEBUG_OUT() << "[DEBUG] Function " << func->getName()
-                << " evaluated with return value: "
-                << (returnValue ? IRPrinter::toString(returnValue) : "nullptr")
-                << std::endl;
+    // DEBUG_OUT() << "[DEBUG] Function " << func->getName()
+    //             << " evaluated with return value: "
+    //             << (returnValue ? IRPrinter::toString(returnValue.get())
+    //                             : "nullptr")
+    //             << std::endl;
 
     return std::make_pair(returnValue, returnValue != nullptr && !runtime);
 }
@@ -345,7 +364,7 @@ bool ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                                       : "[DEBUG Compute] ")
                     << "Evaluating instruction: " << IRPrinter::toString(inst);
 
-        Value* result = nullptr;
+        ValuePtr result = nullptr;
 
         if (auto* alloca = dyn_cast<AllocaInst>(inst)) {
             result = evaluateAllocaInst(alloca, valueMap);
@@ -376,14 +395,16 @@ bool ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                 "Unknown instruction type in block evaluation: " +
                 IRPrinter::toString(inst));
         }
-        DEBUG_OUT() << "\t= " << IRPrinter::toString(result) << std::endl;
+        DEBUG_OUT() << "\t= "
+                    << (result ? IRPrinter::toString(result.get()) : "nullptr")
+                    << std::endl;
 
         updateValueMap(inst, result, valueMap);
     }
     return runtime;
 }
 
-bool ComptimePass::updateValueMap(Value* key, Value* result,
+bool ComptimePass::updateValueMap(Value* key, ValuePtr result,
                                   ValueMap& valueMap) {
 #ifdef A_OUT_DEBUG
     if (!key) {
@@ -393,7 +414,7 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
     bool runtime = false;
     if (result) {
         if (valueMap.count(key)) {
-            if (valueMap[key] != result) {
+            if (valueMap[key].get() != result.get()) {
                 DEBUG_OUT() << "[DEBUG] Value changed for " << key->getName()
                             << ", marking as runtime" << std::endl;
                 markAsRuntime(key, valueMap, true);
@@ -405,7 +426,7 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
         if (!isPropagation) {
             if (auto gv = dyn_cast<GlobalVariable>(key);
                 gv && !gv->getValueType()->isArrayType()) {
-                gv->setInitializer(valueMap[key]);
+                gv->setInitializer(valueMap[key].get());
             }
         }
         valueMap.erase(key);
@@ -437,7 +458,7 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
 
     std::unordered_map<PHINode*, std::vector<PHINode*>> dependencies;
     std::unordered_map<PHINode*, int> inDegree;
-    std::unordered_map<PHINode*, Value*> tempValues;
+    std::unordered_map<PHINode*, ValuePtr> tempValues;
     std::queue<PHINode*> queue;
 
     // Build dependency graph for PHI nodes
@@ -491,7 +512,7 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
     for (auto* phi : phiNodes) {
         if (inDegree[phi] > 0) {
             Value* incomingVal = phi->getIncomingValueForBlock(prevBlock);
-            Value* result = nullptr;
+            ValuePtr result = nullptr;
             if (incomingVal) {
                 if (auto* srcPhi = dyn_cast<PHINode>(incomingVal)) {
                     if (tempValues.count(srcPhi)) {
@@ -510,8 +531,9 @@ void ComptimePass::handlePHINodes(BasicBlock* block, BasicBlock* prevBlock,
     }
 }
 
-Value* ComptimePass::evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
-                                     ValueMap& valueMap) {
+ComptimePass::ValuePtr ComptimePass::evaluatePHINode(PHINode* phi,
+                                                     BasicBlock* prevBlock,
+                                                     ValueMap& valueMap) {
     if (!prevBlock) {
         return nullptr;
     }
@@ -524,71 +546,76 @@ Value* ComptimePass::evaluatePHINode(PHINode* phi, BasicBlock* prevBlock,
     return getValueOrConstant(incomingVal, valueMap);
 }
 
-Value* ComptimePass::evaluateAllocaInst(AllocaInst* alloca,
-                                        ValueMap& valueMap) {
+ComptimePass::ValuePtr ComptimePass::evaluateAllocaInst(AllocaInst* alloca,
+                                                        ValueMap& valueMap) {
     Type* allocatedType = alloca->getAllocatedType();
-    Value* initialValue = createZeroInitializedConstant(allocatedType);
+    Constant* zeroInit = createZeroInitializedConstant(allocatedType);
+    // Don't delete any Constants as they may be referenced elsewhere
+    ValuePtr initialValue = createManagedValue(zeroInit);
     valueMap[alloca] = initialValue;
     return initialValue;
 }
 
-Value* ComptimePass::evaluateBinaryOp(BinaryOperator* binOp,
-                                      ValueMap& valueMap) {
-    Value* lhs = getValueOrConstant(binOp->getOperand(0), valueMap);
-    Value* rhs = getValueOrConstant(binOp->getOperand(1), valueMap);
+ComptimePass::ValuePtr ComptimePass::evaluateBinaryOp(BinaryOperator* binOp,
+                                                      ValueMap& valueMap) {
+    ValuePtr lhs = getValueOrConstant(binOp->getOperand(0), valueMap);
+    ValuePtr rhs = getValueOrConstant(binOp->getOperand(1), valueMap);
 
     if (!lhs || !rhs) return nullptr;
 
     Opcode op = binOp->getOpcode();
 
     // Handle integer operations
-    if (auto* lhsInt = dyn_cast<ConstantInt>(lhs)) {
-        if (auto* rhsInt = dyn_cast<ConstantInt>(rhs)) {
+    if (auto* lhsInt = dyn_cast<ConstantInt>(lhs.get())) {
+        if (auto* rhsInt = dyn_cast<ConstantInt>(rhs.get())) {
             int32_t l = lhsInt->getSignedValue();
             int32_t r = rhsInt->getSignedValue();
 
             switch (op) {
                 case Opcode::Add:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l + r);
                 case Opcode::Sub:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l - r);
                 case Opcode::Mul:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l * r);
                 case Opcode::Div:
                     if (r != 0)
-                        return ConstantInt::get(
+                        return ConstantInt::getShared(
                             cast<IntegerType>(lhsInt->getType()), l / r);
                     break;
                 case Opcode::Rem:
                     if (r != 0)
-                        return ConstantInt::get(
+                        return ConstantInt::getShared(
                             cast<IntegerType>(lhsInt->getType()), l % r);
                     break;
                 case Opcode::And:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l & r);
                 case Opcode::Or:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l | r);
                 case Opcode::Xor:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l ^ r);
                 case Opcode::LAnd:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l && r);
                 case Opcode::LOr:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l || r);
                 case Opcode::Shl:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l << r);
                 case Opcode::Shr:
-                    return ConstantInt::get(
+                    return ConstantInt::getShared(
                         cast<IntegerType>(lhsInt->getType()), l >> r);
                 default:
+                    std::cerr
+                        << "[ERROR] Error inst: " << IRPrinter::toString(binOp)
+                        << std::endl;
                     throw std::runtime_error(
                         "Unsupported opcode: " +
                         std::to_string(static_cast<int>(op)));
@@ -598,24 +625,24 @@ Value* ComptimePass::evaluateBinaryOp(BinaryOperator* binOp,
     }
 
     // Handle float operations
-    if (auto* lhsFP = dyn_cast<ConstantFP>(lhs)) {
-        if (auto* rhsFP = dyn_cast<ConstantFP>(rhs)) {
+    if (auto* lhsFP = dyn_cast<ConstantFP>(lhs.get())) {
+        if (auto* rhsFP = dyn_cast<ConstantFP>(rhs.get())) {
             float l = lhsFP->getValue();
             float r = rhsFP->getValue();
 
             switch (op) {
                 case Opcode::FAdd:
-                    return ConstantFP::get(cast<FloatType>(lhsFP->getType()),
-                                           l + r);
+                    return ConstantFP::getShared(
+                        cast<FloatType>(lhsFP->getType()), l + r);
                 case Opcode::FSub:
-                    return ConstantFP::get(cast<FloatType>(lhsFP->getType()),
-                                           l - r);
+                    return ConstantFP::getShared(
+                        cast<FloatType>(lhsFP->getType()), l - r);
                 case Opcode::FMul:
-                    return ConstantFP::get(cast<FloatType>(lhsFP->getType()),
-                                           l * r);
+                    return ConstantFP::getShared(
+                        cast<FloatType>(lhsFP->getType()), l * r);
                 case Opcode::FDiv:
                     if (r != 0.0f)
-                        return ConstantFP::get(
+                        return ConstantFP::getShared(
                             cast<FloatType>(lhsFP->getType()), l / r);
                     break;
                 default:
@@ -627,33 +654,35 @@ Value* ComptimePass::evaluateBinaryOp(BinaryOperator* binOp,
     return nullptr;
 }
 
-Value* ComptimePass::evaluateUnaryOp(UnaryOperator* unOp, ValueMap& valueMap) {
-    Value* operand = getValueOrConstant(unOp->getOperand(), valueMap);
+ComptimePass::ValuePtr ComptimePass::evaluateUnaryOp(UnaryOperator* unOp,
+                                                     ValueMap& valueMap) {
+    ValuePtr operand = getValueOrConstant(unOp->getOperand(), valueMap);
     if (!operand) return nullptr;
 
-    if (auto* intVal = dyn_cast<ConstantInt>(operand)) {
+    if (auto* intVal = dyn_cast<ConstantInt>(operand.get())) {
         int32_t val = intVal->getSignedValue();
 
         switch (unOp->getOpcode()) {
             case Opcode::UAdd:
-                return intVal;
+                return operand;
             case Opcode::USub:
-                return ConstantInt::get(cast<IntegerType>(intVal->getType()),
-                                        -val);
+                return ConstantInt::getShared(
+                    cast<IntegerType>(intVal->getType()), -val);
             case Opcode::Not:
-                return ConstantInt::get(cast<IntegerType>(intVal->getType()),
-                                        !val);
+                return ConstantInt::getShared(
+                    cast<IntegerType>(intVal->getType()), !val);
             default:
                 break;
         }
-    } else if (auto* fpVal = dyn_cast<ConstantFP>(operand)) {
+    } else if (auto* fpVal = dyn_cast<ConstantFP>(operand.get())) {
         float val = fpVal->getValue();
 
         switch (unOp->getOpcode()) {
             case Opcode::UAdd:
-                return fpVal;
+                return operand;
             case Opcode::USub:
-                return ConstantFP::get(cast<FloatType>(fpVal->getType()), -val);
+                return ConstantFP::getShared(cast<FloatType>(fpVal->getType()),
+                                             -val);
             default:
                 break;
         }
@@ -662,9 +691,10 @@ Value* ComptimePass::evaluateUnaryOp(UnaryOperator* unOp, ValueMap& valueMap) {
     return nullptr;
 }
 
-Value* ComptimePass::evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap) {
-    Value* lhs = getValueOrConstant(cmp->getOperand(0), valueMap);
-    Value* rhs = getValueOrConstant(cmp->getOperand(1), valueMap);
+ComptimePass::ValuePtr ComptimePass::evaluateCmpInst(CmpInst* cmp,
+                                                     ValueMap& valueMap) {
+    ValuePtr lhs = getValueOrConstant(cmp->getOperand(0), valueMap);
+    ValuePtr rhs = getValueOrConstant(cmp->getOperand(1), valueMap);
 
     if (!lhs || !rhs) {
         return nullptr;
@@ -672,9 +702,9 @@ Value* ComptimePass::evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap) {
 
     bool result = false;
     bool wasEvaluated = false;
-    if (isa<ConstantInt>(lhs) && isa<ConstantInt>(rhs)) {
-        auto* lhsInt = dyn_cast<ConstantInt>(lhs);
-        auto* rhsInt = dyn_cast<ConstantInt>(rhs);
+    if (isa<ConstantInt>(lhs.get()) && isa<ConstantInt>(rhs.get())) {
+        auto* lhsInt = dyn_cast<ConstantInt>(lhs.get());
+        auto* rhsInt = dyn_cast<ConstantInt>(rhs.get());
         int32_t l = lhsInt->getSignedValue();
         int32_t r = rhsInt->getSignedValue();
 
@@ -706,9 +736,9 @@ Value* ComptimePass::evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap) {
             default:
                 break;
         }
-    } else if (isa<ConstantFP>(lhs) && isa<ConstantFP>(rhs)) {
-        auto* lhsFP = dyn_cast<ConstantFP>(lhs);
-        auto* rhsFP = dyn_cast<ConstantFP>(rhs);
+    } else if (isa<ConstantFP>(lhs.get()) && isa<ConstantFP>(rhs.get())) {
+        auto* lhsFP = dyn_cast<ConstantFP>(lhs.get());
+        auto* rhsFP = dyn_cast<ConstantFP>(rhs.get());
         float l = lhsFP->getValue();
         float r = rhsFP->getValue();
 
@@ -747,27 +777,33 @@ Value* ComptimePass::evaluateCmpInst(CmpInst* cmp, ValueMap& valueMap) {
     }
 
     auto* ctx = cmp->getContext();
-    return result ? ConstantInt::getTrue(ctx) : ConstantInt::getFalse(ctx);
+    return wrapValue(result ? ConstantInt::getTrue(ctx)
+                            : ConstantInt::getFalse(ctx));
 }
 
-Value* ComptimePass::evaluateLoadInst(LoadInst* load, ValueMap& valueMap) {
+ComptimePass::ValuePtr ComptimePass::evaluateLoadInst(LoadInst* load,
+                                                      ValueMap& valueMap) {
     Value* ptr = load->getPointerOperand();
 
     auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
 
     if (localValueMap.count(ptr)) {
-        Value* v = localValueMap[ptr];
-        if (auto* gepConst = dyn_cast<ConstantGEP>(v)) {
-            return gepConst->getElement();
+        ValuePtr v = localValueMap[ptr];
+        if (auto* gepConst = dyn_cast<ConstantGEP>(v.get())) {
+            DEBUG_OUT() << IRPrinter::printType(
+                               gepConst->getElement()->getType())
+                        << std::endl;
+            return wrapValue(gepConst->getElement());
         }
         return v;
     }
     return nullptr;
 }
 
-Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
-                                       bool skipSideEffect) {
-    Value* value = getValueOrConstant(store->getValueOperand(), valueMap);
+ComptimePass::ValuePtr ComptimePass::evaluateStoreInst(StoreInst* store,
+                                                       ValueMap& valueMap,
+                                                       bool skipSideEffect) {
+    ValuePtr value = getValueOrConstant(store->getValueOperand(), valueMap);
     Value* ptr = store->getPointerOperand();
 
     if (!value || skipSideEffect) {
@@ -781,27 +817,34 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
     if (isa<GlobalVariable>(ptr) && globalValueMap.count(ptr)) {
         globalValueMap[ptr] = value;
         DEBUG_OUT() << "\tupdated global value for " << ptr->getName() << " = "
-                    << IRPrinter::toString(value) << std::endl;
+                    << IRPrinter::toString(value.get()) << std::endl;
     } else if (valueMap.count(ptr)) {
-        if (auto* gepConst = dyn_cast<ConstantGEP>(valueMap[ptr])) {
-            gepConst->setElementValue(value);
+        if (auto* gepConst = dyn_cast<ConstantGEP>(valueMap[ptr].get())) {
+            gepConst->setElementValue(value.get());
         } else {
             valueMap[ptr] = value;
         }
         DEBUG_OUT() << "\tupdated value for " << ptr->getName() << " = "
-                    << IRPrinter::toString(value) << std::endl;
+                    << IRPrinter::toString(value.get()) << std::endl;
     } else {
         markAsRuntime(store, valueMap);
     }
-    return store;
+    return wrapValue(store);
 }
 
-Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
+ComptimePass::ValuePtr ComptimePass::evaluateGEP(GetElementPtrInst* gep,
+                                                 ValueMap& valueMap) {
     Value* ptr = gep->getPointerOperand();
 
-    if (isa<Argument>(ptr)) {
-        ptr = valueMap[ptr];
-    }
+    // if (isa<Argument>(ptr)) {
+    //     auto it = valueMap.find(ptr);
+    //     if (it != valueMap.end()) {
+    //         ptr = it->second.get();
+    //     }
+    //     DEBUG_OUT() << "[DEBUG] GEP on argument: " <<
+    //     IRPrinter::toString(ptr)
+    //                 << std::endl;
+    // }
 
     auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
 
@@ -809,38 +852,38 @@ Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
         return nullptr;
     }
 
-    Value* baseVal = localValueMap[ptr];
+    ValuePtr baseVal = localValueMap[ptr];
 
     // Collect indices as ConstantInt*
     std::vector<ConstantInt*> ciIndices;
     ciIndices.reserve(gep->getNumIndices());
     for (size_t i = 0; i < gep->getNumIndices(); ++i) {
-        Value* idx = getValueOrConstant(gep->getIndex(i), localValueMap);
-        if (auto* ci = dyn_cast<ConstantInt>(idx)) {
-            ciIndices.push_back(ci);
+        ValuePtr idx = getValueOrConstant(gep->getIndex(i), localValueMap);
+        if (idx && isa<ConstantInt>(idx.get())) {
+            ciIndices.push_back(cast<ConstantInt>(idx.get()));
         } else {
             return nullptr;
         }
     }
 
     ConstantGEP* resultGEP = nullptr;
-    if (auto* baseArr = dyn_cast<ConstantArray>(baseVal)) {
+    if (auto* baseArr = dyn_cast<ConstantArray>(baseVal.get())) {
         Type* indexType = gep->getSourceElementType();
         resultGEP = ConstantGEP::get(baseArr, indexType, ciIndices);
     }
-    if (auto* baseGep = dyn_cast<ConstantGEP>(baseVal)) {
+    if (auto* baseGep = dyn_cast<ConstantGEP>(baseVal.get())) {
         resultGEP = ConstantGEP::get(baseGep, ciIndices);
     }
     if (resultGEP && !resultGEP->getArrayPointer())
         resultGEP->setArrayPointer(gep->getBasePointer());
 
-    return resultGEP;
+    // ConstantGEP holds raw pointers to ConstantArray, so we can't delete them
+    return createManagedValue(resultGEP);
 }
 
-std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
-                                                       ValueMap& valueMap,
-                                                       bool isMainFunction,
-                                                       bool skipSideEffect) {
+std::pair<ComptimePass::ValuePtr, bool> ComptimePass::evaluateCallInst(
+    CallInst* call, ValueMap& valueMap, bool isMainFunction,
+    bool skipSideEffect) {
     Function* func = call->getCalledFunction();
 
     if (!func || func->isDeclaration()) {
@@ -853,7 +896,7 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
         return std::make_pair(nullptr, false);
     }
 
-    std::vector<Value*> args;
+    std::vector<ValuePtr> args;
     std::vector<Value*> argsRef;
     bool allArgsCompileTime = true;
     for (size_t i = 0; i < call->getNumArgOperands(); ++i) {
@@ -861,7 +904,7 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
             allArgsCompileTime = false;
             break;
         }
-        Value* arg = getValueOrConstant(call->getArgOperand(i), valueMap);
+        ValuePtr arg = getValueOrConstant(call->getArgOperand(i), valueMap);
         if (!arg) {
             allArgsCompileTime = false;
             break;
@@ -883,40 +926,44 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
 
     DEBUG_OUT() << "[DEBUG] Evaluating call: " << func->getName()
                 << " with args: ";
-    for (auto* arg : args) {
-        DEBUG_OUT() << IRPrinter::toString(arg) << " ";
+    for (const auto& arg : args) {
+        DEBUG_OUT() << IRPrinter::toString(arg.get()) << " ";
     }
     DEBUG_OUT() << std::endl;
 
     return evaluateFunction(func, args, false, nullptr, valueMap, argsRef);
 }
 
-Value* ComptimePass::evaluateCastInst(CastInst* castInst, ValueMap& valueMap) {
-    Value* operand = getValueOrConstant(castInst->getOperand(0), valueMap);
+ComptimePass::ValuePtr ComptimePass::evaluateCastInst(CastInst* castInst,
+                                                      ValueMap& valueMap) {
+    ValuePtr operand = getValueOrConstant(castInst->getOperand(0), valueMap);
     if (!operand) return nullptr;
 
     Type* destType = castInst->getDestType();
 
     switch (castInst->getCastOpcode()) {
         case CastInst::SIToFP:  // Signed integer to float
-            if (auto* intVal = dyn_cast<ConstantInt>(operand)) {
-                return ConstantFP::get(cast<FloatType>(destType),
-                                       (float)intVal->getSignedValue());
+            if (auto* intVal = dyn_cast<ConstantInt>(operand.get())) {
+                return ConstantFP::getShared(cast<FloatType>(destType),
+                                             (float)intVal->getSignedValue());
             }
             break;
 
         case CastInst::FPToSI:  // Float to signed integer
-            if (auto* fpVal = dyn_cast<ConstantFP>(operand)) {
-                return ConstantInt::get(cast<IntegerType>(destType),
-                                        (int32_t)fpVal->getValue());
+            if (auto* fpVal = dyn_cast<ConstantFP>(operand.get())) {
+                return ConstantInt::getShared(cast<IntegerType>(destType),
+                                              (int32_t)fpVal->getValue());
             }
         case CastInst::ZExt:
-            if (auto* intVal = dyn_cast<ConstantInt>(operand)) {
-                return ConstantInt::get(cast<IntegerType>(destType),
-                                        intVal->getUnsignedValue());
+            if (auto* intVal = dyn_cast<ConstantInt>(operand.get())) {
+                return ConstantInt::getShared(cast<IntegerType>(destType),
+                                              intVal->getUnsignedValue());
             }
             break;
         default:
+            throw std::runtime_error(
+                "Unsupported cast operation: " +
+                std::to_string(static_cast<int>(castInst->getCastOpcode())));
             break;
     }
 
@@ -939,12 +986,13 @@ size_t ComptimePass::eliminateComputedInstructions(Function*) {
             }
 
             // Skip non-scalar constant values
-            if (isa<ConstantArray>(computedValue) &&
-                !(isa<ConstantInt>(computedValue) ||
-                  isa<ConstantFP>(computedValue))) {
-                DEBUG_OUT() << "[DEBUG] Skipping ConstantArray value: "
-                            << inst->getName() << " = "
-                            << IRPrinter::toString(computedValue) << std::endl;
+            if (isa<ConstantArray>(computedValue.get()) &&
+                !(isa<ConstantInt>(computedValue.get()) ||
+                  isa<ConstantFP>(computedValue.get()))) {
+                DEBUG_OUT()
+                    << "[DEBUG] Skipping ConstantArray value: "
+                    << inst->getName() << " = "
+                    << IRPrinter::toString(computedValue.get()) << std::endl;
                 continue;
             }
 
@@ -957,9 +1005,9 @@ size_t ComptimePass::eliminateComputedInstructions(Function*) {
 
     // Remove instructions and replace uses
     for (auto* inst : toRemove) {
-        Value* replacement = globalValueMap[inst];
+        ValuePtr replacement = globalValueMap[inst];
         if (replacement && !inst->getType()->isVoidType()) {
-            inst->replaceAllUsesWith(replacement);
+            inst->replaceAllUsesWith(replacement.get());
         }
         inst->eraseFromParent();
     }
@@ -987,8 +1035,8 @@ bool ComptimePass::initializeValues(Module& module) {
     // Initialize global values
     for (auto* gv : module.globals()) {
         if (globalValueMap.count(gv)) {
-            auto* value = globalValueMap[gv];
-            setGlobalInitializer(gv, value);
+            ValuePtr value = globalValueMap[gv];
+            setGlobalInitializer(gv, value.get());
         }
     }
 
@@ -996,7 +1044,7 @@ bool ComptimePass::initializeValues(Module& module) {
     Function* mainFunc = module.getFunction("main");
     if (!mainFunc) return false;
     BasicBlock* entryBlock = &mainFunc->getEntryBlock();
-    std::vector<std::pair<AllocaInst*, Value*>> localValues;
+    std::vector<std::pair<AllocaInst*, ValuePtr>> localValues;
 
     // Find local arrays that need initialization
     for (auto* inst : *entryBlock) {
@@ -1009,7 +1057,7 @@ bool ComptimePass::initializeValues(Module& module) {
     std::reverse(localValues.begin(), localValues.end());
 
     for (auto& [alloca, value] : localValues) {
-        if (auto* arrayValue = dyn_cast<ConstantArray>(value)) {
+        if (auto* arrayValue = dyn_cast<ConstantArray>(value.get())) {
             initializeLocalArray(mainFunc, alloca, arrayValue);
         } else {
             IRBuilder builder(mainFunc->getContext());
@@ -1022,7 +1070,7 @@ bool ComptimePass::initializeValues(Module& module) {
             }
 
             builder.setInsertPoint(*insertPoint);
-            builder.createStore(value, alloca);
+            builder.createStore(value.get(), alloca);
         }
     }
 
@@ -1210,8 +1258,9 @@ void ComptimePass::collectFlatIndices(
     }
 }
 
-Value* ComptimePass::getValueOrConstant(Value* v, ValueMap& valueMap) {
-    if (isa<Constant>(v)) return v;
+ComptimePass::ValuePtr ComptimePass::getValueOrConstant(Value* v,
+                                                        ValueMap& valueMap) {
+    if (isa<Constant>(v)) return wrapValue(v);
     auto it = valueMap.find(v);
     if (it != valueMap.end()) return it->second;
     auto it2 = globalValueMap.find(v);
@@ -1295,7 +1344,8 @@ void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap,
 
     if (auto gv = dyn_cast<GlobalVariable>(value)) {
         if (globalValueMap.count(gv)) {
-            if (!isPropagation) setGlobalInitializer(gv, globalValueMap[gv]);
+            if (!isPropagation)
+                setGlobalInitializer(gv, globalValueMap[gv].get());
             globalValueMap.erase(gv);
         }
     }

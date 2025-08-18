@@ -31,9 +31,13 @@ class ConstantInt : public Constant {
 
    public:
     static ConstantInt* get(IntegerType* ty, uint32_t val);
+    static std::shared_ptr<ConstantInt> getShared(IntegerType* ty,
+                                                  uint32_t val);
     static ConstantInt* get(Context* ctx, unsigned bitWidth, uint32_t val);
     static ConstantInt* getTrue(Context* ctx);
+    static std::shared_ptr<ConstantInt> getTrueShared(Context* ctx);
     static ConstantInt* getFalse(Context* ctx);
+    static std::shared_ptr<ConstantInt> getFalseShared(Context* ctx);
 
     int32_t getValue() const { return getSignedValue(); }
     uint32_t getUnsignedValue() const { return value_; }
@@ -61,6 +65,7 @@ class ConstantFP : public Constant {
 
    public:
     static ConstantFP* get(FloatType* ty, float val);
+    static std::shared_ptr<ConstantFP> getShared(FloatType* ty, float val);
     static ConstantFP* get(Context* ctx, float val);
 
     float getValue() const { return value_; }
@@ -125,6 +130,11 @@ class ConstantArray : public Constant {
         for (unsigned i = getNumElements(); i > 0; --i) {
             if (auto* elem = dyn_cast<ConstantInt>(getElement(i - 1))) {
                 if (elem->getSignedValue() != 0) {
+                    lastNonZero = i;
+                    break;
+                }
+            } else if (auto* elem = dyn_cast<ConstantFP>(getElement(i - 1))) {
+                if (elem->getValue() != 0.0f) {
                     lastNonZero = i;
                     break;
                 }
