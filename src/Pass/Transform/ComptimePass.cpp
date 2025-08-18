@@ -44,10 +44,10 @@ bool ComptimePass::runOnModule(Module& module, AnalysisManager& am) {
 
     bool changed = false;
 
-    initializeGlobalValueMap(module);
-
     Function* mainFunc = module.getFunction("main");
     if (mainFunc) {
+        initializeGlobalValueMap(module);
+
         // Pass 1: Propagation - identify compile-time and runtime instructions
         evaluateFunction(mainFunc, {}, true, nullptr, globalValueMap, {});
 
@@ -250,6 +250,8 @@ std::pair<Value*, bool> ComptimePass::evaluateFunction(
     // Bind function arguments
     for (size_t i = 0; i < args.size() && i < func->getNumArgs(); ++i) {
         valueMap[func->getArg(i)] = args[i];
+        DEBUG_OUT() << "[DEBUG] init func arg " << func->getArg(i)->getName()
+                    << " = " << IRPrinter::toString(args[i]) << std::endl;
     }
 
     BasicBlock* currentBlock = &func->getEntryBlock();
@@ -374,8 +376,7 @@ bool ComptimePass::evaluateBlock(BasicBlock* block, BasicBlock* prevBlock,
                 "Unknown instruction type in block evaluation: " +
                 IRPrinter::toString(inst));
         }
-        DEBUG_OUT() << "\t= (" << result << ") " << IRPrinter::toString(result)
-                    << std::endl;
+        DEBUG_OUT() << "\t= " << IRPrinter::toString(result) << std::endl;
 
         updateValueMap(inst, result, valueMap);
     }
@@ -395,7 +396,7 @@ bool ComptimePass::updateValueMap(Value* key, Value* result,
             if (valueMap[key] != result) {
                 DEBUG_OUT() << "[DEBUG] Value changed for " << key->getName()
                             << ", marking as runtime" << std::endl;
-                markAsRuntime(key, valueMap);
+                markAsRuntime(key, valueMap, true);
                 runtime = true;
             }
         }
@@ -798,6 +799,10 @@ Value* ComptimePass::evaluateStoreInst(StoreInst* store, ValueMap& valueMap,
 Value* ComptimePass::evaluateGEP(GetElementPtrInst* gep, ValueMap& valueMap) {
     Value* ptr = gep->getPointerOperand();
 
+    if (isa<Argument>(ptr)) {
+        ptr = valueMap[ptr];
+    }
+
     auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
 
     if (!localValueMap.count(ptr)) {
@@ -875,6 +880,13 @@ std::pair<Value*, bool> ComptimePass::evaluateCallInst(CallInst* call,
         return std::make_pair(nullptr, false);
     }
     if (skipSideEffect) return std::make_pair(nullptr, false);
+
+    DEBUG_OUT() << "[DEBUG] Evaluating call: " << func->getName()
+                << " with args: ";
+    for (auto* arg : args) {
+        DEBUG_OUT() << IRPrinter::toString(arg) << " ";
+    }
+    DEBUG_OUT() << std::endl;
 
     return evaluateFunction(func, args, false, nullptr, valueMap, argsRef);
 }
@@ -1275,7 +1287,8 @@ void ComptimePass::performRuntimePropagation(BasicBlock* startBlock,
     }
 }
 
-void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap) {
+void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap,
+                                 bool no_gep) {
     if (!value) return;
     DEBUG_OUT() << "[DEBUG] Marking as runtime: " << IRPrinter::toString(value)
                 << std::endl;
@@ -1289,12 +1302,13 @@ void ComptimePass::markAsRuntime(Value* value, ValueMap& valueMap) {
 
     runtimeValues.insert(value);
 
-    // If it's a GEP, mark the base array as runtime
-    if (auto* gep = dyn_cast<GetElementPtrInst>(value)) {
-        markAsRuntime(gep->getPointerOperand(), valueMap);
-    }
-    if (auto* constGEP = dyn_cast<ConstantGEP>(value)) {
-        markAsRuntime(constGEP->getArrayPointer(), valueMap);
+    if (!no_gep) {
+        if (auto* gep = dyn_cast<GetElementPtrInst>(value)) {
+            markAsRuntime(gep->getPointerOperand(), valueMap);
+        }
+        if (auto* constGEP = dyn_cast<ConstantGEP>(value)) {
+            markAsRuntime(constGEP->getArrayPointer(), valueMap);
+        }
     }
 }
 
