@@ -37,6 +37,8 @@ enum class ValueKind {
     BranchInst,
     PHINode,
     InstructionEnd,
+
+    RISCVInstruction
 };
 
 template <typename To, typename From>
