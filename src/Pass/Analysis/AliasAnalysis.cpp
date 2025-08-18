@@ -58,7 +58,7 @@ bool AliasAnalysis::Result::mayModify(Instruction* inst, const Location& loc) {
             if (auto cg = analysisManager->getAnalysis<CallGraph>(
                     "CallGraphAnalysis", *function->getParent())) {
                 if (auto calledFunction = call->getCalledFunction()) {
-                    if (!cg->hasSideEffects(calledFunction)) {
+                    if (!cg->hasSideEffectsOn(calledFunction, loc.ptr)) {
                         return false;
                     }
                 }

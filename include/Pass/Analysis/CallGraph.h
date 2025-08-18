@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <stack>
 #include <unordered_map>
@@ -286,6 +287,12 @@ class CallGraph : public AnalysisResult {
         }
         return false;
     }
+
+    mutable std::map<Function*, std::unordered_set<Value*>> affectedValuesCache_;
+    std::unordered_set<Value*> collectAffectedValues_recursive(
+    Function* F, std::unordered_set<Function*>& visited) const;
+    const std::unordered_set<Value*>& getAffectedValues(Function* F) const;
+    bool hasSideEffectsOn(Function* F, Value* value);
 
     /// Check if a function has side effects
     bool hasSideEffects(Function* F) const {

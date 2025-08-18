@@ -97,6 +97,177 @@ void CallGraph::analyzeSideEffects() {
     }
 }
 
+/**
+ * @brief Gets the base pointer of a value, traversing through GEPs and casts.
+ *
+ * @param V The value to find the base pointer for.
+ * @return Value* The base pointer (e.g., a GlobalVariable, Argument, or AllocaInst).
+ */
+static Value* getBasePointer(Value* V) {
+    // This is a simplified version. A complete one would handle more cast instructions.
+    while (auto* GEP = dyn_cast<GetElementPtrInst>(V)) {
+        V = GEP->getPointerOperand();
+    }
+    return V;
+}
+
+/**
+ * @brief Recursively collects all values (global variables and pointer arguments)
+ * that the given function F might modify.
+ *
+ * This is the internal implementation that performs the traversal.
+ *
+ * @param F The function to analyze.
+ * @param visited The set of functions currently in the recursion stack to detect cycles.
+ * @return A set of base pointers that are affected by F.
+ */
+std::unordered_set<Value*> CallGraph::collectAffectedValues_recursive(
+    Function* F, std::unordered_set<Function*>& visited) const {
+    
+    // 1. Cache Check: If already computed, return the result.
+    if (affectedValuesCache_.count(F)) {
+        return affectedValuesCache_.at(F);
+    }
+
+    // 2. Cycle Detection: If we are already visiting this function in the current path,
+    // return an empty set to break the cycle. The effects will be aggregated up the stack.
+    if (visited.count(F)) {
+        return {};
+    }
+    visited.insert(F);
+
+    std::unordered_set<Value*> affectedValues;
+
+    // 3. Conservative assumption for external functions.
+    if (F->isDeclaration()) {
+        // Assume external functions can modify any pointer argument and any global variable.
+        for (auto it = F->arg_begin(); it != F->arg_end(); ++it) {
+        
+            if (it->get()->getType()->isPointerType()) {
+                affectedValues.insert(it->get());
+            }
+        }
+        for (GlobalVariable* GV : module_->globals()) {
+            affectedValues.insert(GV);
+        }
+    } else {
+        // 4. Analyze the function body.
+        AliasAnalysis::Result* aliasInfo = nullptr;
+        if (analysisManager_) {
+            aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *F);
+        }
+
+        for (BasicBlock* BB : *F) {
+            for (Instruction* I : *BB) {
+                // Case A: Direct modification via a store instruction.
+                if (auto* store = dyn_cast<StoreInst>(I)) {
+                    Value* storedPtr = getBasePointer(store->getPointerOperand());
+                    if (isa<GlobalVariable>(storedPtr) || isa<Argument>(storedPtr)) {
+                        affectedValues.insert(storedPtr);
+                    }
+                }
+                // Case B: Indirect modification via a call instruction.
+                else if (auto* call = dyn_cast<CallInst>(I)) {
+                    Function* callee = call->getCalledFunction();
+                    
+                    if (callee) { // Direct call
+                        auto calleeAffected = collectAffectedValues_recursive(callee, visited);
+
+                        for (Value* affectedVal : calleeAffected) {
+                            // If callee modifies a global, it's a side effect in the caller.
+                            if (isa<GlobalVariable>(affectedVal)) {
+                                affectedValues.insert(affectedVal);
+                            }
+                            // If callee modifies one of its arguments, map it back to the caller's value.
+                            else if (auto* arg = dyn_cast<Argument>(affectedVal)) {
+                                unsigned int argNo = arg->getArgNo();
+                                if (argNo < call->getNumArgOperands()) {
+                                    Value* callerArg = getBasePointer(call->getArgOperand(argNo));
+                                    affectedValues.insert(callerArg);
+                                }
+                            }
+                        }
+                    } else { // Indirect call (function pointer)
+                        // Conservatively assume it can modify any passed pointer argument and any global.
+                        for (unsigned i = 0; i < call->getNumArgOperands(); ++i) {
+                            Value* arg = call->getArgOperand(i);
+                            if (arg->getType()->isPointerType()) {
+                                affectedValues.insert(getBasePointer(arg));
+                            }
+                        }
+                        for (GlobalVariable* GV : module_->globals()) {
+                            affectedValues.insert(GV);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Backtrack and Cache the result.
+    visited.erase(F);
+    affectedValuesCache_[F] = affectedValues;
+    return affectedValues;
+}
+
+/**
+ * @brief Returns the set of all global variables and arguments that Function F might modify.
+ * * This is the public interface that manages the top-level call.
+ *
+ * @param F The function to analyze.
+ * @return const std::unordered_set<Value*>& A reference to the cached set of affected values.
+ */
+const std::unordered_set<Value*>& CallGraph::getAffectedValues(Function* F) const {
+    if (affectedValuesCache_.find(F) == affectedValuesCache_.end()) {
+        std::unordered_set<Function*> visited;
+        collectAffectedValues_recursive(F, visited);
+    }
+    return affectedValuesCache_.at(F);
+}
+
+/**
+ * @brief Checks if a function F has a side effect on a specific value.
+ *
+ * A side effect is defined as a potential modification (store) to the memory
+ * location pointed to by `value`. `value` should be a global variable or a
+ * pointer-type argument.
+ *
+ * @param F The function to check.
+ * @param value The value (e.g., a global or argument) to check for modification.
+ * @return true if F or any of its callees might modify `value`.
+ * @return false otherwise.
+ */
+bool CallGraph::hasSideEffectsOn(Function* F, Value* value) {
+    // 1. Get the set of all values modified by F and its callees.
+    const auto& affectedSet = getAffectedValues(F);
+
+    // 2. Get the base pointer of the value we are querying.
+    Value* baseValue = getBasePointer(value);
+
+    // 3. Check if the base pointer is in the affected set.
+    if (affectedSet.count(baseValue)) {
+        return true;
+    }
+
+    // 4. Use Alias Analysis for more precision.
+    // Check if any value in the affected set may alias with our target value.
+    AliasAnalysis::Result* aliasInfo = nullptr;
+    if (analysisManager_) {
+        // Alias analysis is function-specific, so we run it on F's context.
+        aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *F);
+    }
+
+    if (aliasInfo) {
+        for (Value* affected : affectedSet) {
+            if (aliasInfo->alias(affected, baseValue) != AliasAnalysis::AliasResult::NoAlias) {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
 bool CallGraph::hasSideEffectsInternal(Function* F,
                                        std::unordered_set<Function*>& visited) {
     if (visited.count(F)) {
