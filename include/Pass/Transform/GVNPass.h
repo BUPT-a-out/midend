@@ -19,6 +19,8 @@ template <bool>
 class DominanceInfoBase;
 using DominanceInfo = DominanceInfoBase<false>;
 class CallGraph;
+class MemorySSA;
+class MemoryAccess;
 
 class GVNPass : public FunctionPass {
    public:
@@ -33,7 +35,8 @@ class GVNPass : public FunctionPass {
     bool runOnFunction(Function& F, AnalysisManager& AM) override;
 
     std::vector<std::string> getDependencies() const {
-        return {"DominanceAnalysis", "CallGraphAnalysis", "AliasAnalysis"};
+        return {"DominanceAnalysis", "CallGraphAnalysis", "AliasAnalysis",
+                "MemorySSAAnalysis"};
     }
 
     void init() {}
@@ -62,6 +65,7 @@ class GVNPass : public FunctionPass {
     DominanceInfo* DI = nullptr;
     CallGraph* CG = nullptr;
     AliasAnalysis::Result* AA = nullptr;
+    MemorySSA* MSSA = nullptr;
 
     unsigned numGVNEliminated = 0;
     unsigned numPHIEliminated = 0;
@@ -86,6 +90,8 @@ class GVNPass : public FunctionPass {
     Value* findAvailableLoad(Instruction* Load, BasicBlock* BB);
     bool hasInterveningStore(Instruction* availLoad, Instruction* currentLoad,
                              Value* ptr);
+    bool walkMemorySSAForClobber(MemoryAccess* availAccess,
+                                 MemoryAccess* currentAccess, Value* ptr);
     void recordAvailableLoad(Instruction* Load);
     void invalidateLoads(Instruction* Store);
 
