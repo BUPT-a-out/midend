@@ -38,7 +38,8 @@ enum class ValueKind {
     PHINode,
     InstructionEnd,
 
-    RISCVInstruction
+    RISCVInstruction,
+    SCEV,
 };
 
 template <typename To, typename From>
