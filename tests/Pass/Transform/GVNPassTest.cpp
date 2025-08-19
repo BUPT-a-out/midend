@@ -8,6 +8,7 @@
 #include "Pass/Analysis/AliasAnalysis.h"
 #include "Pass/Analysis/CallGraph.h"
 #include "Pass/Analysis/DominanceInfo.h"
+#include "Pass/Analysis/MemorySSA.h"
 #include "Pass/Pass.h"
 #include "Pass/Transform/GVNPass.h"
 
@@ -23,6 +24,7 @@ class GVNPassTest : public ::testing::Test {
         am->registerAnalysisType<DominanceAnalysis>();
         am->registerAnalysisType<CallGraphAnalysis>();
         am->registerAnalysisType<AliasAnalysis>();
+        am->registerAnalysisType<MemorySSAAnalysis>();
     }
 
     void TearDown() override {
@@ -1088,6 +1090,191 @@ entry:
   store i32 42, i32* %alloca2
   %result = add i32 %load1, %load1
   ret i32 %result
+}
+)");
+}
+
+// Test: Cross-block load elimination using MemorySSA
+TEST_F(GVNPassTest, CrossBlockLoadElimination) {
+    auto intType = ctx->getIntegerType(32);
+    auto ptrType = ctx->getPointerType(intType);
+    auto funcType = FunctionType::get(intType, {ptrType, intType});
+    auto func = Function::Create(funcType, "test_func", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto thenBB = BasicBlock::Create(ctx.get(), "then", func);
+    auto elseBB = BasicBlock::Create(ctx.get(), "else", func);
+    auto mergeBB = BasicBlock::Create(ctx.get(), "merge", func);
+
+    auto ptr = func->getArg(0);
+    auto cond = func->getArg(1);
+
+    // Entry block: load from ptr
+    builder->setInsertPoint(entryBB);
+    auto load1 = builder->createLoad(ptr, "load1");
+    auto condBool = builder->createICmpNE(cond, builder->getInt32(0), "cond");
+    builder->createCondBr(condBool, thenBB, elseBB);
+
+    // Then block: load from same ptr (should be eliminated)
+    builder->setInsertPoint(thenBB);
+    auto load2 = builder->createLoad(ptr, "load2");
+    auto add1 = builder->createAdd(load1, load2, "add1");
+    builder->createBr(mergeBB);
+
+    // Else block: load from same ptr (should be eliminated)
+    builder->setInsertPoint(elseBB);
+    auto load3 = builder->createLoad(ptr, "load3");
+    auto add2 = builder->createAdd(load1, load3, "add2");
+    builder->createBr(mergeBB);
+
+    // Merge block
+    builder->setInsertPoint(mergeBB);
+    auto phi = builder->createPHI(intType, "phi");
+    phi->addIncoming(add1, thenBB);
+    phi->addIncoming(add2, elseBB);
+    builder->createRet(phi);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_func(i32* %arg0, i32 %arg1) {
+entry:
+  %load1 = load i32, i32* %arg0
+  %cond = icmp ne i32 %arg1, 0
+  br i1 %cond, label %then, label %else
+then:
+  %load2 = load i32, i32* %arg0
+  %add1 = add i32 %load1, %load2
+  br label %merge
+else:
+  %load3 = load i32, i32* %arg0
+  %add2 = add i32 %load1, %load3
+  br label %merge
+merge:
+  %phi = phi i32 [ %add1, %then ], [ %add2, %else ]
+  ret i32 %phi
+}
+)");
+
+    // Run GVN Pass
+    GVNPass gvn;
+    bool changed = gvn.runOnFunction(*func, *am);
+    EXPECT_TRUE(changed);
+
+    // After GVN with MemorySSA, load2 and load3 should be eliminated
+    // as they load from the same location as load1 with no intervening stores
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_func(i32* %arg0, i32 %arg1) {
+entry:
+  %load1 = load i32, i32* %arg0
+  %cond = icmp ne i32 %arg1, 0
+  br i1 %cond, label %then, label %else
+then:
+  %add1 = add i32 %load1, %load1
+  br label %merge
+else:
+  %add2 = add i32 %load1, %load1
+  br label %merge
+merge:
+  %phi = phi i32 [ %add1, %then ], [ %add2, %else ]
+  ret i32 %phi
+}
+)");
+}
+
+// Test: Cross-block load elimination with intervening store
+TEST_F(GVNPassTest, CrossBlockLoadEliminationWithInterveningStore) {
+    auto intType = ctx->getIntegerType(32);
+    auto ptrType = ctx->getPointerType(intType);
+    auto funcType = FunctionType::get(intType, {ptrType, intType});
+    auto func = Function::Create(funcType, "test_func", module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto thenBB = BasicBlock::Create(ctx.get(), "then", func);
+    auto elseBB = BasicBlock::Create(ctx.get(), "else", func);
+    auto mergeBB = BasicBlock::Create(ctx.get(), "merge", func);
+
+    auto ptr = func->getArg(0);
+    auto cond = func->getArg(1);
+
+    // Entry block: load from ptr
+    builder->setInsertPoint(entryBB);
+    auto load1 = builder->createLoad(ptr, "load1");
+    auto condBool = builder->createICmpNE(cond, builder->getInt32(0), "cond");
+    builder->createCondBr(condBool, thenBB, elseBB);
+
+    // Then block: store to ptr, then load (should not be eliminated)
+    builder->setInsertPoint(thenBB);
+    builder->createStore(builder->getInt32(100), ptr);
+    auto load2 = builder->createLoad(ptr, "load2");
+    auto add1 = builder->createAdd(load1, load2, "add1");
+    builder->createBr(mergeBB);
+
+    // Else block: load from same ptr (should be eliminated as no intervening
+    // store)
+    builder->setInsertPoint(elseBB);
+    auto load3 = builder->createLoad(ptr, "load3");
+    auto add2 = builder->createAdd(load1, load3, "add2");
+    builder->createBr(mergeBB);
+
+    // Merge block
+    builder->setInsertPoint(mergeBB);
+    auto phi = builder->createPHI(intType, "phi");
+    phi->addIncoming(add1, thenBB);
+    phi->addIncoming(add2, elseBB);
+    auto load = builder->createLoad(ptr, "load");
+    auto finalAdd = builder->createAdd(phi, load, "finalAdd");
+    builder->createRet(finalAdd);
+
+    auto beforeIR = IRPrinter().print(func);
+    EXPECT_EQ(beforeIR,
+              R"(define i32 @test_func(i32* %arg0, i32 %arg1) {
+entry:
+  %load1 = load i32, i32* %arg0
+  %cond = icmp ne i32 %arg1, 0
+  br i1 %cond, label %then, label %else
+then:
+  store i32 100, i32* %arg0
+  %load2 = load i32, i32* %arg0
+  %add1 = add i32 %load1, %load2
+  br label %merge
+else:
+  %load3 = load i32, i32* %arg0
+  %add2 = add i32 %load1, %load3
+  br label %merge
+merge:
+  %phi = phi i32 [ %add1, %then ], [ %add2, %else ]
+  %load = load i32, i32* %arg0
+  %finalAdd = add i32 %phi, %load
+  ret i32 %finalAdd
+}
+)");
+
+    // Run GVN Pass
+    GVNPass gvn;
+    bool changed = gvn.runOnFunction(*func, *am);
+    EXPECT_TRUE(changed);
+
+    // After GVN with MemorySSA:
+    // - load3 should be eliminated (no intervening store on else path)
+    // - load2 should NOT be eliminated (there's a store before it)
+    EXPECT_EQ(IRPrinter().print(func),
+              R"(define i32 @test_func(i32* %arg0, i32 %arg1) {
+entry:
+  %load1 = load i32, i32* %arg0
+  %cond = icmp ne i32 %arg1, 0
+  br i1 %cond, label %then, label %else
+then:
+  store i32 100, i32* %arg0
+  %load2 = load i32, i32* %arg0
+  %add1 = add i32 %load1, %load2
+  br label %merge
+else:
+  %add2 = add i32 %load1, %load1
+  br label %merge
+merge:
+  %phi = phi i32 [ %add1, %then ], [ %add2, %else ]
+  %load = load i32, i32* %arg0
+  %finalAdd = add i32 %phi, %load
+  ret i32 %finalAdd
 }
 )");
 }

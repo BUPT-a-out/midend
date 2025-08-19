@@ -14,6 +14,7 @@
 #include "Pass/Analysis/AliasAnalysis.h"
 #include "Pass/Analysis/CallGraph.h"
 #include "Pass/Analysis/DominanceInfo.h"
+#include "Pass/Analysis/MemorySSA.h"
 #include "Support/Casting.h"
 
 constexpr bool GVN_DEBUG = false;
@@ -84,9 +85,10 @@ bool GVNPass::runOnFunction(Function& F, AnalysisManager& AM) {
     DI = AM.getAnalysis<DominanceInfo>("DominanceAnalysis", F);
     CG = AM.getAnalysis<CallGraph>("CallGraphAnalysis", *F.getParent());
     AA = AM.getAnalysis<AliasAnalysis::Result>("AliasAnalysis", F);
-    if (!AA || !DI || !CG) {
-        std::cerr << "Warning: GVNPass requires DominanceInfo, CallGraph, and "
-                     "AliasAnalysis. Skipping function "
+    MSSA = AM.getAnalysis<MemorySSA>("MemorySSAAnalysis", F);
+    if (!AA || !DI || !CG || !MSSA) {
+        std::cerr << "Warning: GVNPass requires DominanceInfo, CallGraph, "
+                     "AliasAnalysis, and MemorySSA. Skipping function "
                   << F.getName() << "." << std::endl;
         return false;
     }
@@ -426,8 +428,86 @@ bool GVNPass::hasInterveningStore(Instruction* availLoad,
         return false;
     }
 
-    // TODO: cross-block stores analysis should be handled by MemorySSA
-    return true;
+    // Use MemorySSA for cross-block stores analysis
+    if (!MSSA) {
+        return true;  // Conservative fallback
+    }
+
+    // Get the memory access for the current load
+    auto* currentMemAccess = MSSA->getMemoryAccess(currentLoad);
+    if (!currentMemAccess) {
+        return true;  // Conservative fallback
+    }
+
+    // Find the clobbering memory access for the current load
+    auto* clobberingAccess = MSSA->getClobberingMemoryAccess(currentMemAccess);
+    if (!clobberingAccess) {
+        return false;  // No clobbering access found
+    }
+
+    // Check if the available load is clobbered by any memory definition
+    // between the available load and current load
+    auto* availMemAccess = MSSA->getMemoryAccess(availLoad);
+    if (!availMemAccess) {
+        return true;  // Conservative fallback
+    }
+
+    // Walk the memory SSA chain to see if there's a clobber between
+    // the available load and current load
+    return walkMemorySSAForClobber(availMemAccess, currentMemAccess, ptr);
+}
+
+bool GVNPass::walkMemorySSAForClobber(MemoryAccess* availAccess,
+                                      MemoryAccess* currentAccess, Value* ptr) {
+    if (!availAccess || !currentAccess || !ptr) {
+        return true;  // Conservative fallback
+    }
+
+    // Find the clobbering access for the current load
+    auto* clobberingAccess = MSSA->getClobberingMemoryAccess(currentAccess);
+    if (!clobberingAccess) {
+        return false;  // No clobbering access
+    }
+
+    // Walk backwards from the clobbering access to see if it comes after
+    // the available load access
+    auto* currentClobber = clobberingAccess;
+    std::unordered_set<MemoryAccess*> visited;
+
+    while (currentClobber && visited.find(currentClobber) == visited.end()) {
+        visited.insert(currentClobber);
+
+        // If we reached the available access, there's no intervening store
+        if (currentClobber == availAccess) {
+            return false;
+        }
+
+        // If this is a memory def, check if it may clobber our pointer
+        if (auto* memDef = dyn_cast<MemoryDef>(currentClobber)) {
+            Instruction* defInst = memDef->getMemoryInst();
+
+            // If this def may modify our pointer location, it's a clobber
+            if (defInst && AA->mayModify(defInst, ptr)) {
+                return true;
+            }
+
+            // Move to the defining access
+            currentClobber = memDef->getDefiningAccess();
+        } else if (auto* memPhi = dyn_cast<MemoryPhi>(currentClobber)) {
+            // For phi nodes, conservatively check all incoming values
+            for (unsigned i = 0; i < memPhi->getNumIncomingValues(); ++i) {
+                auto* incomingAccess = memPhi->getIncomingValue(i);
+                if (walkMemorySSAForClobber(availAccess, incomingAccess, ptr)) {
+                    return true;
+                }
+            }
+            break;
+        } else {
+            break;
+        }
+    }
+
+    return false;  // No clobbering store found
 }
 
 Value* GVNPass::findAvailableLoad(Instruction* Load, BasicBlock* BB) {
