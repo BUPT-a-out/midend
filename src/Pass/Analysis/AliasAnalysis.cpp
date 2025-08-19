@@ -58,11 +58,12 @@ bool AliasAnalysis::Result::mayModify(Instruction* inst, const Location& loc) {
             if (auto cg = analysisManager->getAnalysis<CallGraph>(
                     "CallGraphAnalysis", *function->getParent())) {
                 if (auto calledFunction = call->getCalledFunction()) {
-                    if (!cg->hasSideEffectsOn(calledFunction, loc.ptr)) {
-                        return false;
+                    if (cg->hasSideEffectsOn(calledFunction, loc.ptr)) {
+                        return true;
                     }
                 }
             }
+            return false;
         }
 
         if (isGlobalObject(loc.ptr)) {
@@ -208,6 +209,10 @@ AliasResult AliasAnalysis::Result::aliasInternal(const Location& loc1,
     }
 
     if (isa<ConstantPointerNull>(v1) || isa<ConstantPointerNull>(v2)) {
+        return AliasResult::NoAlias;
+    }
+
+    if (v1->getType()->isPointerType() != v2->getType()->isPointerType()) {
         return AliasResult::NoAlias;
     }
 
