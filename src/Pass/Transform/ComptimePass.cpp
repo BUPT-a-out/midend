@@ -836,15 +836,14 @@ ComptimePass::ValuePtr ComptimePass::evaluateGEP(GetElementPtrInst* gep,
                                                  ValueMap& valueMap) {
     Value* ptr = gep->getPointerOperand();
 
-    // if (isa<Argument>(ptr)) {
-    //     auto it = valueMap.find(ptr);
-    //     if (it != valueMap.end()) {
-    //         ptr = it->second.get();
-    //     }
-    //     DEBUG_OUT() << "[DEBUG] GEP on argument: " <<
-    //     IRPrinter::toString(ptr)
-    //                 << std::endl;
-    // }
+    if (isa<Argument>(ptr)) {
+        auto it = valueMap.find(ptr);
+        if (it != valueMap.end()) {
+            ptr = it->second.get();
+        }
+        DEBUG_OUT() << "[DEBUG] GEP on argument: " << IRPrinter::toString(ptr)
+                    << std::endl;
+    }
 
     auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
 
@@ -1368,7 +1367,9 @@ void ComptimePass::invalidateValuesFromCall(CallInst* call,
     // Invalidate all global variables
     std::vector<Value*> toErase;
     for (auto& [key, val] : valueMap) {
-        if (isa<GlobalVariable>(key) && !func->isDeclaration()) {
+        if (isa<GlobalVariable>(key) && func->getName() != "_sysy_starttime" &&
+            func->getName() != "_sysy_endtime" &&
+            (!func->isDeclaration() || func->getNumArgs() > 0)) {
             toErase.push_back(key);
         }
     }
