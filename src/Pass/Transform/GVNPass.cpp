@@ -89,7 +89,7 @@ bool GVNPass::runOnFunction(Function& F, AnalysisManager& AM) {
     CG = AM.getAnalysis<CallGraph>("CallGraphAnalysis", *F.getParent());
     AA = AM.getAnalysis<AliasAnalysis::Result>("AliasAnalysis", F);
     MSSA = AM.getAnalysis<MemorySSA>("MemorySSAAnalysis", F);
-    if (!AA || !DI || !CG || !MSSA) {
+    if (!AA || !DI || !CG) {
         std::cerr << "Warning: GVNPass requires DominanceInfo, CallGraph, "
                      "AliasAnalysis, and MemorySSA. Skipping function "
                   << F.getName() << "." << std::endl;
@@ -509,6 +509,7 @@ bool GVNPass::walkMemorySSAForClobber(MemoryAccess* availAccess,
         // If this is a memory def, check if it may clobber our pointer
         if (auto* memDef = dyn_cast<MemoryDef>(currentClobber)) {
             Instruction* defInst = memDef->getMemoryInst();
+            if (!defInst || !defInst->getParent()) return false;
 
             // If this def may modify our pointer location, it's a clobber
             if (defInst && AA->mayModify(defInst, ptr)) {
@@ -610,9 +611,6 @@ bool GVNPass::processFunctionCall(Instruction* Call) {
         return false;
     }
 
-    // Pure function or
-    // non-pure, but only reads.
-    std::cout << callee->getNumArgs() << " may pure " << std::endl;
     Expression expr = createCallExpression(CI);
     if (eliminateRedundancy(CI, expr)) {
         numCallEliminated++;
