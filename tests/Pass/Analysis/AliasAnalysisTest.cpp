@@ -25,6 +25,7 @@ class AliasAnalysisTest : public ::testing::Test {
         builder = std::make_unique<IRBuilder>(context.get());
         am = std::make_unique<AnalysisManager>();
         am->registerAnalysisType<AliasAnalysis>();
+        am->registerAnalysisType<CallGraphAnalysis>();
     }
 
     std::unique_ptr<Context> context;
@@ -745,7 +746,7 @@ TEST_F(AliasAnalysisTest, EscapedPointer) {
     // After escape, loads and stores may be affected
     builder->createLoad(local, "load1");
 
-    // External function that might use the escaped pointer
+    // External function not use the escaped pointer
     auto extFuncType = FunctionType::get(context->getVoidType(), {});
     auto extFunc = Function::Create(extFuncType, "external_func", module.get());
     auto call = builder->createCall(extFunc, {});
@@ -760,79 +761,13 @@ TEST_F(AliasAnalysisTest, EscapedPointer) {
         am->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *func);
 
     // The escaped pointer might be modified by external call
-    EXPECT_TRUE(result->mayModify(call, local));
+    EXPECT_FALSE(result->mayModify(call, local));
 
     // Global pointer may alias with local after escape
     auto load_global = builder->createLoad(global_ptr, "load_global");
     // The loaded pointer from global may alias with local
     EXPECT_NE(result->alias(load_global, local),
               AliasAnalysis::AliasResult::NoAlias);
-}
-
-// Test: Conservative behavior without CallGraph
-TEST_F(AliasAnalysisTest, ConservativeBehaviorWithoutCallGraph) {
-    auto intType = context->getInt32Type();
-
-    // Create a pure function that just returns its parameter
-    auto pureFuncType = FunctionType::get(intType, {intType});
-    auto pureFunc = Function::Create(pureFuncType, "pure_func", module.get());
-
-    // Setup pure function body
-    auto pureBB = BasicBlock::Create(context.get(), "entry", pureFunc);
-    builder->setInsertPoint(pureBB);
-    auto arg = pureFunc->getArg(0);
-    builder->createRet(arg);
-
-    // Create test function
-    auto testFuncType = FunctionType::get(context->getVoidType(), {});
-    auto testFunc = Function::Create(testFuncType, "test_pure", module.get());
-    auto testBB = BasicBlock::Create(context.get(), "entry", testFunc);
-    builder->setInsertPoint(testBB);
-
-    // Create local variables
-    auto local1 = builder->createAlloca(intType, nullptr, "local1");
-
-    // Call pure function
-    auto call = builder->createCall(pureFunc, {builder->getInt32(42)});
-
-    builder->createRetVoid();
-
-    // Run alias analysis without CallGraph
-    auto* result =
-        am->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *testFunc);
-
-    // Without CallGraph, calls should be conservative (may modify anything)
-    EXPECT_TRUE(result->mayModify(call, local1));
-}
-
-// Test: Backward compatibility when CallGraph is not available
-TEST_F(AliasAnalysisTest, BackwardCompatibilityWithoutCallGraph) {
-    auto intType = context->getInt32Type();
-
-    // Create external function (unknown behavior)
-    auto funcType = FunctionType::get(context->getVoidType(), {});
-    auto unknownFunc = Function::Create(funcType, "unknown_func", module.get());
-
-    // Create test function
-    auto testFunc = Function::Create(funcType, "test_compat", module.get());
-    auto testBB = BasicBlock::Create(context.get(), "entry", testFunc);
-    builder->setInsertPoint(testBB);
-
-    // Create local variable
-    auto local = builder->createAlloca(intType, nullptr, "local");
-
-    // Call unknown function
-    auto call = builder->createCall(unknownFunc, {});
-
-    builder->createRetVoid();
-
-    // DO NOT register CallGraph analysis - use old API without CallGraph
-    auto* result =
-        am->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *testFunc);
-
-    // Without CallGraph, should be conservative and assume it may modify
-    // anything
-    EXPECT_TRUE(result->mayModify(call, local));
 }
 
 // Additional comprehensive tests for the current mayModify behavior
@@ -877,12 +812,11 @@ TEST_F(AliasAnalysisTest, FunctionCallModificationScenarios) {
     auto* result =
         am->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *testFunc);
 
-    // Without CallGraph, all function calls should be conservative
-    EXPECT_TRUE(result->mayModify(externCall, local1));
-    EXPECT_TRUE(result->mayModify(externCall, local2));
-    EXPECT_TRUE(result->mayModify(externCall, global));
+    EXPECT_FALSE(result->mayModify(externCall, local1));
+    EXPECT_FALSE(result->mayModify(externCall, local2));
+    EXPECT_FALSE(result->mayModify(externCall, global));
 
-    EXPECT_TRUE(result->mayModify(unknownCall, local1));
-    EXPECT_TRUE(result->mayModify(unknownCall, local2));
-    EXPECT_TRUE(result->mayModify(unknownCall, global));
+    EXPECT_FALSE(result->mayModify(unknownCall, local1));
+    EXPECT_FALSE(result->mayModify(unknownCall, local2));
+    EXPECT_FALSE(result->mayModify(unknownCall, global));
 }

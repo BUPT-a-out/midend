@@ -288,15 +288,17 @@ class CallGraph : public AnalysisResult {
         return false;
     }
 
-    mutable std::map<Function*, std::unordered_set<Value*>> affectedValuesCache_;
+    mutable std::map<Function*, std::unordered_set<Value*>>
+        affectedValuesCache_;
     std::unordered_set<Value*> collectAffectedValues_recursive(
-    Function* F, std::unordered_set<Function*>& visited) const;
+        Function* F, std::unordered_set<Function*>& visited) const;
     const std::unordered_set<Value*>& getAffectedValues(Function* F) const;
     bool hasSideEffectsOn(Function* F, Value* value);
 
-    mutable std::unordered_map<Function*, std::unordered_set<Value*>> requiredValuesCache_;
+    mutable std::unordered_map<Function*, std::unordered_set<Value*>>
+        requiredValuesCache_;
     std::unordered_set<Value*> collectRequiredValues_recursive(
-    Function* F, std::unordered_set<Function*>& visited) const;
+        Function* F, std::unordered_set<Function*>& visited) const;
     const std::unordered_set<Value*>& getRequiredValues(Function* F) const;
 
     /// Check if a function has side effects

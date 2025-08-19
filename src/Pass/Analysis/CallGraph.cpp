@@ -101,10 +101,12 @@ void CallGraph::analyzeSideEffects() {
  * @brief Gets the base pointer of a value, traversing through GEPs and casts.
  *
  * @param V The value to find the base pointer for.
- * @return Value* The base pointer (e.g., a GlobalVariable, Argument, or AllocaInst).
+ * @return Value* The base pointer (e.g., a GlobalVariable, Argument, or
+ * AllocaInst).
  */
 static Value* getBasePointer(Value* V) {
-    // This is a simplified version. A complete one would handle more cast instructions.
+    // This is a simplified version. A complete one would handle more cast
+    // instructions.
     while (auto* GEP = dyn_cast<GetElementPtrInst>(V)) {
         V = GEP->getPointerOperand();
     }
@@ -112,25 +114,26 @@ static Value* getBasePointer(Value* V) {
 }
 
 /**
- * @brief Recursively collects all values (global variables and pointer arguments)
- * that the given function F might modify.
+ * @brief Recursively collects all values (global variables and pointer
+ * arguments) that the given function F might modify.
  *
  * This is the internal implementation that performs the traversal.
  *
  * @param F The function to analyze.
- * @param visited The set of functions currently in the recursion stack to detect cycles.
+ * @param visited The set of functions currently in the recursion stack to
+ * detect cycles.
  * @return A set of base pointers that are affected by F.
  */
 std::unordered_set<Value*> CallGraph::collectAffectedValues_recursive(
     Function* F, std::unordered_set<Function*>& visited) const {
-    
     // 1. Cache Check: If already computed, return the result.
     if (affectedValuesCache_.count(F)) {
         return affectedValuesCache_.at(F);
     }
 
-    // 2. Cycle Detection: If we are already visiting this function in the current path,
-    // return an empty set to break the cycle. The effects will be aggregated up the stack.
+    // 2. Cycle Detection: If we are already visiting this function in the
+    // current path, return an empty set to break the cycle. The effects will be
+    // aggregated up the stack.
     if (visited.count(F)) {
         return {};
     }
@@ -140,9 +143,9 @@ std::unordered_set<Value*> CallGraph::collectAffectedValues_recursive(
 
     // 3. Conservative assumption for external functions.
     if (F->isDeclaration()) {
-        // Assume external functions can modify any pointer argument and any global variable.
+        // Assume external functions can modify any pointer argument and any
+        // global variable.
         for (auto it = F->arg_begin(); it != F->arg_end(); ++it) {
-        
             if (it->get()->getType()->isPointerType()) {
                 affectedValues.insert(it->get());
             }
@@ -154,42 +157,52 @@ std::unordered_set<Value*> CallGraph::collectAffectedValues_recursive(
         // 4. Analyze the function body.
         AliasAnalysis::Result* aliasInfo = nullptr;
         if (analysisManager_) {
-            aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *F);
+            aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>(
+                "AliasAnalysis", *F);
         }
 
         for (BasicBlock* BB : *F) {
             for (Instruction* I : *BB) {
                 // Case A: Direct modification via a store instruction.
                 if (auto* store = dyn_cast<StoreInst>(I)) {
-                    Value* storedPtr = getBasePointer(store->getPointerOperand());
-                    if (isa<GlobalVariable>(storedPtr) || isa<Argument>(storedPtr)) {
+                    Value* storedPtr =
+                        getBasePointer(store->getPointerOperand());
+                    if (isa<GlobalVariable>(storedPtr) ||
+                        isa<Argument>(storedPtr)) {
                         affectedValues.insert(storedPtr);
                     }
                 }
                 // Case B: Indirect modification via a call instruction.
                 else if (auto* call = dyn_cast<CallInst>(I)) {
                     Function* callee = call->getCalledFunction();
-                    
-                    if (callee) { // Direct call
-                        auto calleeAffected = collectAffectedValues_recursive(callee, visited);
+
+                    if (callee) {  // Direct call
+                        auto calleeAffected =
+                            collectAffectedValues_recursive(callee, visited);
 
                         for (Value* affectedVal : calleeAffected) {
-                            // If callee modifies a global, it's a side effect in the caller.
+                            // If callee modifies a global, it's a side effect
+                            // in the caller.
                             if (isa<GlobalVariable>(affectedVal)) {
                                 affectedValues.insert(affectedVal);
                             }
-                            // If callee modifies one of its arguments, map it back to the caller's value.
-                            else if (auto* arg = dyn_cast<Argument>(affectedVal)) {
+                            // If callee modifies one of its arguments, map it
+                            // back to the caller's value.
+                            else if (auto* arg =
+                                         dyn_cast<Argument>(affectedVal)) {
                                 unsigned int argNo = arg->getArgNo();
                                 if (argNo < call->getNumArgOperands()) {
-                                    Value* callerArg = getBasePointer(call->getArgOperand(argNo));
+                                    Value* callerArg = getBasePointer(
+                                        call->getArgOperand(argNo));
                                     affectedValues.insert(callerArg);
                                 }
                             }
                         }
-                    } else { // Indirect call (function pointer)
-                        // Conservatively assume it can modify any passed pointer argument and any global.
-                        for (unsigned i = 0; i < call->getNumArgOperands(); ++i) {
+                    } else {  // Indirect call (function pointer)
+                        // Conservatively assume it can modify any passed
+                        // pointer argument and any global.
+                        for (unsigned i = 0; i < call->getNumArgOperands();
+                             ++i) {
                             Value* arg = call->getArgOperand(i);
                             if (arg->getType()->isPointerType()) {
                                 affectedValues.insert(getBasePointer(arg));
@@ -211,13 +224,16 @@ std::unordered_set<Value*> CallGraph::collectAffectedValues_recursive(
 }
 
 /**
- * @brief Returns the set of all global variables and arguments that Function F might modify.
+ * @brief Returns the set of all global variables and arguments that Function F
+ * might modify.
  * * This is the public interface that manages the top-level call.
  *
  * @param F The function to analyze.
- * @return const std::unordered_set<Value*>& A reference to the cached set of affected values.
+ * @return const std::unordered_set<Value*>& A reference to the cached set of
+ * affected values.
  */
-const std::unordered_set<Value*>& CallGraph::getAffectedValues(Function* F) const {
+const std::unordered_set<Value*>& CallGraph::getAffectedValues(
+    Function* F) const {
     if (affectedValuesCache_.find(F) == affectedValuesCache_.end()) {
         std::unordered_set<Function*> visited;
         collectAffectedValues_recursive(F, visited);
@@ -226,25 +242,26 @@ const std::unordered_set<Value*>& CallGraph::getAffectedValues(Function* F) cons
 }
 
 /**
- * @brief Recursively collects all values (global variables and pointer arguments)
- * that the given function F might read from (i.e., depends on).
+ * @brief Recursively collects all values (global variables and pointer
+ * arguments) that the given function F might read from (i.e., depends on).
  *
  * This is the internal implementation that performs the traversal.
  *
  * @param F The function to analyze.
- * @param visited The set of functions currently in the recursion stack to detect cycles.
+ * @param visited The set of functions currently in the recursion stack to
+ * detect cycles.
  * @return A set of base pointers that F requires.
  */
 std::unordered_set<Value*> CallGraph::collectRequiredValues_recursive(
     Function* F, std::unordered_set<Function*>& visited) const {
-    
     // 1. Cache Check: If already computed, return the result.
     if (requiredValuesCache_.count(F)) {
         return requiredValuesCache_.at(F);
     }
 
-    // 2. Cycle Detection: If we are already visiting this function in the current path,
-    // return an empty set to break the cycle. The dependencies will be aggregated up the stack.
+    // 2. Cycle Detection: If we are already visiting this function in the
+    // current path, return an empty set to break the cycle. The dependencies
+    // will be aggregated up the stack.
     if (visited.count(F)) {
         return {};
     }
@@ -254,7 +271,8 @@ std::unordered_set<Value*> CallGraph::collectRequiredValues_recursive(
 
     // 3. Conservative assumption for external functions.
     if (F->isDeclaration()) {
-        // Assume external functions can read from any pointer argument and any global variable.
+        // Assume external functions can read from any pointer argument and any
+        // global variable.
         for (auto it = F->arg_begin(); it != F->arg_end(); ++it) {
             if (it->get()->getType()->isPointerType()) {
                 requiredValues.insert(it->get());
@@ -270,30 +288,38 @@ std::unordered_set<Value*> CallGraph::collectRequiredValues_recursive(
                 // Case A: Indirect dependency via a call instruction.
                 if (auto* call = dyn_cast<CallInst>(I)) {
                     Function* callee = call->getCalledFunction();
-                    
-                    if (callee) { // Direct call
-                        auto calleeRequired = collectRequiredValues_recursive(callee, visited);
+
+                    if (callee) {  // Direct call
+                        auto calleeRequired =
+                            collectRequiredValues_recursive(callee, visited);
 
                         for (Value* requiredVal : calleeRequired) {
-                            // If callee requires a global, it's a dependency for the caller.
+                            // If callee requires a global, it's a dependency
+                            // for the caller.
                             if (isa<GlobalVariable>(requiredVal)) {
                                 requiredValues.insert(requiredVal);
                             }
-                            // If callee requires one of its arguments, map it back to the caller's value.
-                            else if (auto* arg = dyn_cast<Argument>(requiredVal)) {
+                            // If callee requires one of its arguments, map it
+                            // back to the caller's value.
+                            else if (auto* arg =
+                                         dyn_cast<Argument>(requiredVal)) {
                                 unsigned int argNo = arg->getArgNo();
                                 if (argNo < call->getNumArgOperands()) {
-                                    Value* callerArg = getBasePointer(call->getArgOperand(argNo));
+                                    Value* callerArg = getBasePointer(
+                                        call->getArgOperand(argNo));
                                     requiredValues.insert(callerArg);
                                 }
                             }
                         }
-                    } else { // Indirect call (function pointer)
+                    } else {  // Indirect call (function pointer)
                         // The function pointer itself is a required value.
-                        requiredValues.insert(getBasePointer(call->getCalledValue()));
+                        requiredValues.insert(
+                            getBasePointer(call->getCalledValue()));
 
-                        // Conservatively assume it can read from any passed pointer argument and any global.
-                        for (unsigned i = 0; i < call->getNumArgOperands(); ++i) {
+                        // Conservatively assume it can read from any passed
+                        // pointer argument and any global.
+                        for (unsigned i = 0; i < call->getNumArgOperands();
+                             ++i) {
                             Value* arg = call->getArgOperand(i);
                             if (arg->getType()->isPointerType()) {
                                 requiredValues.insert(getBasePointer(arg));
@@ -304,15 +330,18 @@ std::unordered_set<Value*> CallGraph::collectRequiredValues_recursive(
                         }
                     }
                 }
-                // Case B: Direct dependency via instruction operands (e.g., load, add, cmp).
-                // Any operand of an instruction is a value that is "read".
+                // Case B: Direct dependency via instruction operands (e.g.,
+                // load, add, cmp). Any operand of an instruction is a value
+                // that is "read".
                 else {
                     auto num = I->getNumOperands();
                     for (unsigned i = 0; i < num; i++) {
                         auto op = I->getOperand(i);
                         Value* baseVal = getBasePointer(op);
-                        // We are interested in dependencies on function arguments or global variables.
-                        if (isa<GlobalVariable>(baseVal) || isa<Argument>(baseVal)) {
+                        // We are interested in dependencies on function
+                        // arguments or global variables.
+                        if (isa<GlobalVariable>(baseVal) ||
+                            isa<Argument>(baseVal)) {
                             requiredValues.insert(baseVal);
                         }
                     }
@@ -328,20 +357,22 @@ std::unordered_set<Value*> CallGraph::collectRequiredValues_recursive(
 }
 
 /**
- * @brief Returns the set of all global variables and arguments that Function F might read from.
- * This is the public interface that manages the top-level call.
+ * @brief Returns the set of all global variables and arguments that Function F
+ * might read from. This is the public interface that manages the top-level
+ * call.
  *
  * @param F The function to analyze.
- * @return const std::unordered_set<Value*>& A reference to the cached set of required values.
+ * @return const std::unordered_set<Value*>& A reference to the cached set of
+ * required values.
  */
-const std::unordered_set<Value*>& CallGraph::getRequiredValues(Function* F) const {
+const std::unordered_set<Value*>& CallGraph::getRequiredValues(
+    Function* F) const {
     if (requiredValuesCache_.find(F) == requiredValuesCache_.end()) {
         std::unordered_set<Function*> visited;
         collectRequiredValues_recursive(F, visited);
     }
     return requiredValuesCache_.at(F);
 }
-
 
 /**
  * @brief Checks if a function F has a side effect on a specific value.
@@ -351,7 +382,8 @@ const std::unordered_set<Value*>& CallGraph::getRequiredValues(Function* F) cons
  * pointer-type argument.
  *
  * @param F The function to check.
- * @param value The value (e.g., a global or argument) to check for modification.
+ * @param value The value (e.g., a global or argument) to check for
+ * modification.
  * @return true if F or any of its callees might modify `value`.
  * @return false otherwise.
  */
@@ -372,22 +404,24 @@ bool CallGraph::hasSideEffectsOn(Function* F, Value* value) {
     AliasAnalysis::Result* aliasInfo = nullptr;
     if (analysisManager_) {
         // Alias analysis is function-specific, so we run it on F's context.
-        aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>("AliasAnalysis", *F);
+        aliasInfo = analysisManager_->getAnalysis<AliasAnalysis::Result>(
+            "AliasAnalysis", *F);
     }
 
     if (aliasInfo) {
         for (Value* affected : affectedSet) {
-            if (aliasInfo->alias(affected, baseValue) != AliasAnalysis::AliasResult::NoAlias) {
+            if (aliasInfo->alias(affected, baseValue) !=
+                AliasAnalysis::AliasResult::NoAlias) {
                 return true;
             }
         }
     }
-    
+
     return false;
 }
 
-bool CallGraph::hasSideEffectsInternal(Function* F,
-                                       std::unordered_set<Function*>& visited) const {
+bool CallGraph::hasSideEffectsInternal(
+    Function* F, std::unordered_set<Function*>& visited) const {
     if (visited.count(F)) {
         return false;
     }

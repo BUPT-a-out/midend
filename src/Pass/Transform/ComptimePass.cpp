@@ -551,7 +551,7 @@ ComptimePass::ValuePtr ComptimePass::evaluateAllocaInst(AllocaInst* alloca,
     Type* allocatedType = alloca->getAllocatedType();
     Constant* zeroInit = createZeroInitializedConstant(allocatedType);
     // Don't delete any Constants as they may be referenced elsewhere
-    ValuePtr initialValue = createManagedValue(zeroInit);
+    ValuePtr initialValue = wrapValue(zeroInit);
     valueMap[alloca] = initialValue;
     return initialValue;
 }
@@ -835,15 +835,6 @@ ComptimePass::ValuePtr ComptimePass::evaluateStoreInst(StoreInst* store,
 ComptimePass::ValuePtr ComptimePass::evaluateGEP(GetElementPtrInst* gep,
                                                  ValueMap& valueMap) {
     Value* ptr = gep->getPointerOperand();
-
-    if (isa<Argument>(ptr)) {
-        auto it = valueMap.find(ptr);
-        if (it != valueMap.end()) {
-            ptr = it->second.get();
-        }
-        DEBUG_OUT() << "[DEBUG] GEP on argument: " << IRPrinter::toString(ptr)
-                    << std::endl;
-    }
 
     auto& localValueMap = isa<GlobalVariable>(ptr) ? globalValueMap : valueMap;
 
@@ -1259,7 +1250,7 @@ void ComptimePass::collectFlatIndices(
 
 ComptimePass::ValuePtr ComptimePass::getValueOrConstant(Value* v,
                                                         ValueMap& valueMap) {
-    if (isa<Constant>(v)) return wrapValue(v);
+    if (!isa<GlobalVariable>(v) && isa<Constant>(v)) return wrapValue(v);
     auto it = valueMap.find(v);
     if (it != valueMap.end()) return it->second;
     auto it2 = globalValueMap.find(v);
