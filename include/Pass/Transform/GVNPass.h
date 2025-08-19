@@ -104,6 +104,8 @@ class GVNPass : public FunctionPass {
     Value* insertPhiForLoadValue(
         LoadInst* LI,
         const std::vector<std::pair<BasicBlock*, Value*>>& incomingValues);
+    Value* findOrCreatePhiInLoopHeader(LoadInst* LI, BasicBlock* loopHeader);
+    void preprocessAllocaLoadsInLoops(Function& F);
     unsigned getMemoryStateValueNumber(MemoryAccess* access);
     Expression createMemoryExpression(LoadInst* LI);
 
