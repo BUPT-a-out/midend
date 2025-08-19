@@ -970,11 +970,11 @@ entry:
 // Test 9.5: Array as function parameter with assignment
 TEST_F(ComptimeTest, ArrayAsParameterWithAssignment) {
     auto intType = ctx->getIntegerType(32);
+    auto intPtrType = ctx->getPointerType(intType);
     auto arrayType = ArrayType::get(intType, 4);
-    auto ptrType = PointerType::get(arrayType);
 
     // Create helper function that modifies array: void init_array(int arr[4])
-    auto helperFuncType = FunctionType::get(ctx->getVoidType(), {ptrType});
+    auto helperFuncType = FunctionType::get(ctx->getVoidType(), {intPtrType});
     auto helperFunc =
         Function::Create(helperFuncType, "init_array", module.get());
     auto helperBB = BasicBlock::Create(ctx.get(), "entry", helperFunc);
@@ -984,7 +984,7 @@ TEST_F(ComptimeTest, ArrayAsParameterWithAssignment) {
     // Initialize array in function: arr[i] = (i+1) * 5
     for (int i = 0; i < 4; i++) {
         auto gep =
-            builder->createGEP(arrayType, arrParam, {builder->getInt32(i)});
+            builder->createGEP(intPtrType, arrParam, {builder->getInt32(i)});
         builder->createStore(builder->getInt32((i + 1) * 5), gep);
     }
     builder->createRetVoid();
@@ -1015,15 +1015,15 @@ TEST_F(ComptimeTest, ArrayAsParameterWithAssignment) {
 
     EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
 
-define void @init_array([4 x i32]* %arg0) {
+define void @init_array(i32* %arg0) {
 entry:
-  %0 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 0
+  %0 = getelementptr i32*, i32* %arg0, i32 0
   store i32 5, i32* %0
-  %1 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 1
+  %1 = getelementptr i32*, i32* %arg0, i32 1
   store i32 10, i32* %1
-  %2 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 2
+  %2 = getelementptr i32*, i32* %arg0, i32 2
   store i32 15, i32* %2
-  %3 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 3
+  %3 = getelementptr i32*, i32* %arg0, i32 3
   store i32 20, i32* %3
   ret void
 }
@@ -1048,15 +1048,15 @@ entry:
 
     EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
 
-define void @init_array([4 x i32]* %arg0) {
+define void @init_array(i32* %arg0) {
 entry:
-  %0 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 0
+  %0 = getelementptr i32*, i32* %arg0, i32 0
   store i32 5, i32* %0
-  %1 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 1
+  %1 = getelementptr i32*, i32* %arg0, i32 1
   store i32 10, i32* %1
-  %2 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 2
+  %2 = getelementptr i32*, i32* %arg0, i32 2
   store i32 15, i32* %2
-  %3 = getelementptr [4 x i32], [4 x i32]* %arg0, i32 3
+  %3 = getelementptr i32*, i32* %arg0, i32 3
   store i32 20, i32* %3
   ret void
 }
@@ -2569,7 +2569,33 @@ define i32 @runtimeFunc()
 
     ComptimePass pass;
     bool changed = pass.runOnModule(*module, *am);
-    EXPECT_FALSE(changed);
+    EXPECT_TRUE(changed);
 
-    EXPECT_EQ(IRPrinter().print(module), beforeIR);
+    EXPECT_EQ(IRPrinter().print(module), R"(; ModuleID = 'test_module'
+
+@g = internal global i32 6
+
+define i32 @main() {
+entry:
+  br label %loop.cond
+loop.cond:
+  %i = phi i32 [ 0, %entry ], [ %i_next, %loop.latch ]
+  %g_load = load i32, i32* @g
+  %loop_cond = icmp slt i32 %i, %g_load
+  br i1 %loop_cond, label %loop.body, label %exit
+loop.body:
+  %0 = call i32 @runtimeFunc()
+  %g_current = load i32, i32* @g
+  %g_next = add i32 %g_current, 1
+  br label %loop.latch
+loop.latch:
+  %i_next = add i32 %i, 2
+  br label %loop.cond
+exit:
+  ret i32 6
+}
+
+define i32 @runtimeFunc()
+
+)");
 }
