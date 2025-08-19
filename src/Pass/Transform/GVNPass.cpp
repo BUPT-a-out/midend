@@ -295,6 +295,10 @@ bool GVNPass::eliminateRedundancy(Instruction* I, const Expression& expr) {
 
             if (auto* CI = dyn_cast<CallInst>(I)) {
                 auto func = CI->getCalledFunction();
+                if (isPureFunction(func)) {
+                    goto replace_old;
+                }
+
                 auto requirements = CG->getRequiredValues(func);
                 if (auto* leaderInst = dyn_cast<Instruction>(leader)) {
                     for (auto req : requirements) {
@@ -306,6 +310,7 @@ bool GVNPass::eliminateRedundancy(Instruction* I, const Expression& expr) {
                 }
             }
 
+        replace_old:
             if constexpr (GVN_DEBUG) {
                 std::cout << "GVN: Eliminated redundant instruction: "
                           << I->getName() << " with " << leader->getName()
@@ -524,6 +529,7 @@ bool GVNPass::processFunctionCall(Instruction* Call) {
 
     // Pure function or
     // non-pure, but only reads.
+    std::cout << callee->getNumArgs() << " may pure " << std::endl;
     Expression expr = createCallExpression(CI);
     if (eliminateRedundancy(CI, expr)) {
         numCallEliminated++;
