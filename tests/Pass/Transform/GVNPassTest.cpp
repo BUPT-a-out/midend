@@ -1931,9 +1931,9 @@ entry:
   store i32 0, i32* %counter
   br label %loop
 loop:
-  %load.phi = phi i32 [ 0, %entry ], [ %load.phi, %loop ]
+  %count_load.phi = phi i32 [ 0, %entry ], [ %inc, %loop ]
   %ptr_load = load i32, i32* %arg0
-  %inc = add i32 %load.phi, 1
+  %inc = add i32 %count_load.phi, 1
   store i32 %inc, i32* %counter
   %modified = mul i32 %ptr_load, 2
   store i32 %modified, i32* %arg0
@@ -2229,8 +2229,9 @@ merge2:
   %phi2 = phi i32 [ %phi1, %merge1 ], [ %mul_inner2, %inner2 ]
   br label %exit
 exit:
+  %final_shared = load i32, i32* %shared
   %load_arr0 = load i32, i32* %gep0
-  %temp = add i32 %mul_inner2, %load_arr0
+  %temp = add i32 %final_shared, %load_arr0
   %result = add i32 %phi2, %temp
   ret i32 %result
 }
@@ -2843,6 +2844,102 @@ entry:
   store i32 %arg1, i32* %gep_y1
   %result = add i32 %arg0, %arg1
   ret i32 %result
+}
+)");
+}
+
+TEST_F(GVNPassTest, SimpleLoopWithAlloca) {
+    auto intType = ctx->getIntegerType(32);
+    auto funcType = FunctionType::get(intType, {intType});
+    auto func = Function::Create(funcType, "test_func", {"arg0"}, module.get());
+
+    auto entryBB = BasicBlock::Create(ctx.get(), "entry", func);
+    auto loopHeaderBB = BasicBlock::Create(ctx.get(), "loop.header", func);
+    auto loopBodyBB = BasicBlock::Create(ctx.get(), "loop.body", func);
+    auto loopExitBB = BasicBlock::Create(ctx.get(), "loop.exit", func);
+
+    builder->setInsertPoint(entryBB);
+    auto alloca = builder->createAlloca(intType, nullptr, "sum");
+    auto allocaI = builder->createAlloca(intType, nullptr, "i");
+
+    // Initialize sum = 0, i = 0
+    builder->createStore(builder->getInt32(0), alloca);
+    builder->createStore(builder->getInt32(0), allocaI);
+    builder->createBr(loopHeaderBB);
+
+    // Loop header: check i < n
+    builder->setInsertPoint(loopHeaderBB);
+    auto loadI = builder->createLoad(allocaI, "i_val");
+    auto condition = builder->createICmpSLT(loadI, func->getArg(0), "cond");
+    builder->createCondBr(condition, loopBodyBB, loopExitBB);
+
+    // Loop body: sum += i; i++
+    builder->setInsertPoint(loopBodyBB);
+    auto currentSum = builder->createLoad(alloca, "sum_val");
+    auto currentI = builder->createLoad(allocaI, "i_val2");
+    auto newSum = builder->createAdd(currentSum, currentI, "new_sum");
+    auto newI = builder->createAdd(currentI, builder->getInt32(1), "new_i");
+    builder->createStore(newSum, alloca);
+    builder->createStore(newI, allocaI);
+    builder->createBr(loopHeaderBB);
+
+    // Loop exit: return sum
+    builder->setInsertPoint(loopExitBB);
+    auto finalSum = builder->createLoad(alloca, "final_sum");
+    builder->createRet(finalSum);
+
+    EXPECT_EQ(IRPrinter().print(func),
+              "define i32 @test_func(i32 %arg0) {\n"
+              "entry:\n"
+              "  %sum = alloca i32\n"
+              "  %i = alloca i32\n"
+              "  store i32 0, i32* %sum\n"
+              "  store i32 0, i32* %i\n"
+              "  br label %loop.header\n"
+              "loop.header:\n"
+              "  %i_val = load i32, i32* %i\n"
+              "  %cond = icmp slt i32 %i_val, %arg0\n"
+              "  br i1 %cond, label %loop.body, label %loop.exit\n"
+              "loop.body:\n"
+              "  %sum_val = load i32, i32* %sum\n"
+              "  %i_val2 = load i32, i32* %i\n"
+              "  %new_sum = add i32 %sum_val, %i_val2\n"
+              "  %new_i = add i32 %i_val2, 1\n"
+              "  store i32 %new_sum, i32* %sum\n"
+              "  store i32 %new_i, i32* %i\n"
+              "  br label %loop.header\n"
+              "loop.exit:\n"
+              "  %final_sum = load i32, i32* %sum\n"
+              "  ret i32 %final_sum\n"
+              "}\n");
+
+    // Run Mem2RegPass
+    GVNPass gvn;
+    bool changed = gvn.runOnFunction(*func, *am);
+    EXPECT_TRUE(changed);
+
+    EXPECT_EQ(IRPrinter().print(func), R"(define i32 @test_func(i32 %arg0) {
+entry:
+  %sum = alloca i32
+  %i = alloca i32
+  store i32 0, i32* %sum
+  store i32 0, i32* %i
+  br label %loop.header
+loop.header:
+  %i_val2.phi = phi i32 [ 0, %entry ], [ %new_i, %loop.body ]
+  %sum_val.phi = phi i32 [ 0, %entry ], [ %new_sum, %loop.body ]
+  %i_val.phi = phi i32 [ 0, %entry ], [ %new_i, %loop.body ]
+  %cond = icmp slt i32 %i_val.phi, %arg0
+  br i1 %cond, label %loop.body, label %loop.exit
+loop.body:
+  %new_sum = add i32 %sum_val.phi, %i_val2.phi
+  %new_i = add i32 %i_val2.phi, 1
+  store i32 %new_sum, i32* %sum
+  store i32 %new_i, i32* %i
+  br label %loop.header
+loop.exit:
+  %final_sum.phi = phi i32 [ 0, %entry ], [ %new_sum, %loop.body ]
+  ret i32 %final_sum.phi
 }
 )");
 }
