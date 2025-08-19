@@ -226,6 +226,124 @@ const std::unordered_set<Value*>& CallGraph::getAffectedValues(Function* F) cons
 }
 
 /**
+ * @brief Recursively collects all values (global variables and pointer arguments)
+ * that the given function F might read from (i.e., depends on).
+ *
+ * This is the internal implementation that performs the traversal.
+ *
+ * @param F The function to analyze.
+ * @param visited The set of functions currently in the recursion stack to detect cycles.
+ * @return A set of base pointers that F requires.
+ */
+std::unordered_set<Value*> CallGraph::collectRequiredValues_recursive(
+    Function* F, std::unordered_set<Function*>& visited) const {
+    
+    // 1. Cache Check: If already computed, return the result.
+    if (requiredValuesCache_.count(F)) {
+        return requiredValuesCache_.at(F);
+    }
+
+    // 2. Cycle Detection: If we are already visiting this function in the current path,
+    // return an empty set to break the cycle. The dependencies will be aggregated up the stack.
+    if (visited.count(F)) {
+        return {};
+    }
+    visited.insert(F);
+
+    std::unordered_set<Value*> requiredValues;
+
+    // 3. Conservative assumption for external functions.
+    if (F->isDeclaration()) {
+        // Assume external functions can read from any pointer argument and any global variable.
+        for (auto it = F->arg_begin(); it != F->arg_end(); ++it) {
+            if (it->get()->getType()->isPointerType()) {
+                requiredValues.insert(it->get());
+            }
+        }
+        for (GlobalVariable* GV : module_->globals()) {
+            requiredValues.insert(GV);
+        }
+    } else {
+        // 4. Analyze the function body.
+        for (BasicBlock* BB : *F) {
+            for (Instruction* I : *BB) {
+                // Case A: Indirect dependency via a call instruction.
+                if (auto* call = dyn_cast<CallInst>(I)) {
+                    Function* callee = call->getCalledFunction();
+                    
+                    if (callee) { // Direct call
+                        auto calleeRequired = collectRequiredValues_recursive(callee, visited);
+
+                        for (Value* requiredVal : calleeRequired) {
+                            // If callee requires a global, it's a dependency for the caller.
+                            if (isa<GlobalVariable>(requiredVal)) {
+                                requiredValues.insert(requiredVal);
+                            }
+                            // If callee requires one of its arguments, map it back to the caller's value.
+                            else if (auto* arg = dyn_cast<Argument>(requiredVal)) {
+                                unsigned int argNo = arg->getArgNo();
+                                if (argNo < call->getNumArgOperands()) {
+                                    Value* callerArg = getBasePointer(call->getArgOperand(argNo));
+                                    requiredValues.insert(callerArg);
+                                }
+                            }
+                        }
+                    } else { // Indirect call (function pointer)
+                        // The function pointer itself is a required value.
+                        requiredValues.insert(getBasePointer(call->getCalledValue()));
+
+                        // Conservatively assume it can read from any passed pointer argument and any global.
+                        for (unsigned i = 0; i < call->getNumArgOperands(); ++i) {
+                            Value* arg = call->getArgOperand(i);
+                            if (arg->getType()->isPointerType()) {
+                                requiredValues.insert(getBasePointer(arg));
+                            }
+                        }
+                        for (GlobalVariable* GV : module_->globals()) {
+                            requiredValues.insert(GV);
+                        }
+                    }
+                }
+                // Case B: Direct dependency via instruction operands (e.g., load, add, cmp).
+                // Any operand of an instruction is a value that is "read".
+                else {
+                    auto num = I->getNumOperands();
+                    for (unsigned i = 0; i < num; i++) {
+                        auto op = I->getOperand(i);
+                        Value* baseVal = getBasePointer(op);
+                        // We are interested in dependencies on function arguments or global variables.
+                        if (isa<GlobalVariable>(baseVal) || isa<Argument>(baseVal)) {
+                            requiredValues.insert(baseVal);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Backtrack and Cache the result.
+    visited.erase(F);
+    requiredValuesCache_[F] = requiredValues;
+    return requiredValuesCache_.at(F);
+}
+
+/**
+ * @brief Returns the set of all global variables and arguments that Function F might read from.
+ * This is the public interface that manages the top-level call.
+ *
+ * @param F The function to analyze.
+ * @return const std::unordered_set<Value*>& A reference to the cached set of required values.
+ */
+const std::unordered_set<Value*>& CallGraph::getRequiredValues(Function* F) const {
+    if (requiredValuesCache_.find(F) == requiredValuesCache_.end()) {
+        std::unordered_set<Function*> visited;
+        collectRequiredValues_recursive(F, visited);
+    }
+    return requiredValuesCache_.at(F);
+}
+
+
+/**
  * @brief Checks if a function F has a side effect on a specific value.
  *
  * A side effect is defined as a potential modification (store) to the memory
@@ -269,7 +387,7 @@ bool CallGraph::hasSideEffectsOn(Function* F, Value* value) {
 }
 
 bool CallGraph::hasSideEffectsInternal(Function* F,
-                                       std::unordered_set<Function*>& visited) {
+                                       std::unordered_set<Function*>& visited) const {
     if (visited.count(F)) {
         return false;
     }

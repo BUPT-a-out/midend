@@ -234,7 +234,7 @@ class CallGraph : public AnalysisResult {
     NodeMap nodes_;
     SCCVector sccs_;
     std::unordered_map<Function*, size_t> functionToSCC_;
-    std::unordered_map<Function*, bool> sideEffectCache_;
+    mutable std::unordered_map<Function*, bool> sideEffectCache_;
     mutable std::unordered_map<Function*, bool> pureCache_;
     mutable std::unique_ptr<SuperGraph> superGraph_;
 
@@ -252,7 +252,7 @@ class CallGraph : public AnalysisResult {
     void tarjanVisit(CallGraphNode* node, TarjanState& state);
     void analyzeSideEffects();
     bool hasSideEffectsInternal(Function* F,
-                                std::unordered_set<Function*>& visited);
+                                std::unordered_set<Function*>& visited) const;
     bool isPureFunctionInternal(Function* F,
                                 std::unordered_set<Function*>& visited) const;
     void buildSuperGraph() const;
@@ -294,10 +294,19 @@ class CallGraph : public AnalysisResult {
     const std::unordered_set<Value*>& getAffectedValues(Function* F) const;
     bool hasSideEffectsOn(Function* F, Value* value);
 
+    mutable std::unordered_map<Function*, std::unordered_set<Value*>> requiredValuesCache_;
+    std::unordered_set<Value*> collectRequiredValues_recursive(
+    Function* F, std::unordered_set<Function*>& visited) const;
+    const std::unordered_set<Value*>& getRequiredValues(Function* F) const;
+
     /// Check if a function has side effects
     bool hasSideEffects(Function* F) const {
-        auto it = sideEffectCache_.find(F);
-        return it != sideEffectCache_.end() ? it->second : true;
+        // auto it = sideEffectCache_.find(F);
+        // if (it != sideEffectCache_.end()) {
+        //     return it->second;
+        // }
+        std::unordered_set<Function*> visited;
+        return hasSideEffectsInternal(F, visited);
     }
 
     /// Check if a function is pure

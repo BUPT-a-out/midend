@@ -273,6 +273,8 @@ bool GVNPass::isCommutative(unsigned opcode) {
 }
 
 bool GVNPass::eliminateRedundancy(Instruction* I, const Expression& expr) {
+    auto BB = I->getParent();
+
     // Check if expression already exists
     auto it = expressionToValueNumber.find(expr);
     if (it != expressionToValueNumber.end()) {
@@ -287,6 +289,19 @@ bool GVNPass::eliminateRedundancy(Instruction* I, const Expression& expr) {
                                             LI->getPointerOperand())) {
                         // Don't eliminate - there's an intervening store
                         goto record_new;
+                    }
+                }
+            }
+
+            if (auto* CI = dyn_cast<CallInst>(I)) {
+                auto func = CI->getCalledFunction();
+                auto requirements = CG->getRequiredValues(func);
+                if (auto* leaderInst = dyn_cast<Instruction>(leader)) {
+                    for (auto req : requirements) {
+                        if (hasInterveningStore(leaderInst, I, req)) {
+                            // If modified, do not eliminate
+                            goto record_new;
+                        }
                     }
                 }
             }
@@ -306,8 +321,8 @@ record_new:
 
     unsigned vn = getValueNumber(I);
     expressionToValueNumber[expr] = vn;
-    blockInfoMap[I->getParent()].availableExpressions[expr] = vn;
-    blockInfoMap[I->getParent()].availableValues.insert(vn);
+    blockInfoMap[BB].availableExpressions[expr] = vn;
+    blockInfoMap[BB].availableValues.insert(vn);
 
     return false;
 }
@@ -401,6 +416,7 @@ bool GVNPass::eliminateLoadRedundancy(Instruction* Load) {
     return false;
 }
 
+// TODO: do something
 bool GVNPass::hasInterveningStore(Instruction* availLoad,
                                   Instruction* currentLoad, Value* ptr) {
     BasicBlock* availBB = availLoad->getParent();
@@ -484,16 +500,30 @@ bool GVNPass::processFunctionCall(Instruction* Call) {
     auto* CI = cast<CallInst>(Call);
     Function* callee = CI->getCalledFunction();
 
-    if (!callee || !isPureFunction(callee)) {
-        // Not pure - invalidate memory
-        for (auto& [BB, info] : blockInfoMap) {
-            info.availableLoads.clear();
+    auto affectedValue = CG->getAffectedValues(callee);
+
+    // It has side effect! Cannot reuse.
+    if (CG->hasSideEffects(callee) || !affectedValue.empty()) {
+        auto BB = Call->getParent();
+        auto& blockInfo = blockInfoMap[BB];
+        for (auto mod : affectedValue) {
+            auto newEnd = std::remove_if(
+                blockInfo.availableLoads.begin(),
+                blockInfo.availableLoads.end(),
+                [this, mod](const std::pair<Value*, Instruction*>& loadInfo) {
+                    if (!AA) return true;  // Conservative: invalidate all
+                    return AA->alias(loadInfo.first, mod) !=
+                           AliasAnalysis::AliasResult::NoAlias;
+                });
+            blockInfo.availableLoads.erase(newEnd,
+                                           blockInfo.availableLoads.end());
         }
         getValueNumber(CI);  // Still assign value number
         return false;
     }
 
-    // Pure function
+    // Pure function or
+    // non-pure, but only reads.
     Expression expr = createCallExpression(CI);
     if (eliminateRedundancy(CI, expr)) {
         numCallEliminated++;
