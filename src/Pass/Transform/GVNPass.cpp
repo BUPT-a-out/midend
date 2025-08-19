@@ -82,6 +82,9 @@ std::size_t GVNPass::ExpressionHash::operator()(const Expression& expr) const {
 }
 
 bool GVNPass::runOnFunction(Function& F, AnalysisManager& AM) {
+    if (F.isDeclaration()) {
+        return false;
+    }
     DI = AM.getAnalysis<DominanceInfo>("DominanceAnalysis", F);
     CG = AM.getAnalysis<CallGraph>("CallGraphAnalysis", *F.getParent());
     AA = AM.getAnalysis<AliasAnalysis::Result>("AliasAnalysis", F);
