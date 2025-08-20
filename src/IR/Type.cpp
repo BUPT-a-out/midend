@@ -55,9 +55,9 @@ Context::Context() {
 VoidType* Context::getVoidType() { return voidType_.get(); }
 
 IntegerType* Context::getIntegerType(unsigned bits) {
-    if (bits != 1 && bits != 32) {
+    if (bits != 1 && bits != 32 && bits != 8) {
         std::cerr << "Warning: unsupported integer type bits: " << bits
-                  << ". Only 1 and 32 bits are supported." << std::endl;
+                  << ". Only 1, 8, and 32 bits are supported." << std::endl;
     }
     auto& type = integerTypes_[bits];
     if (!type) {
