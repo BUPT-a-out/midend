@@ -88,7 +88,7 @@ bool GVNPass::runOnFunction(Function& F, AnalysisManager& AM) {
     DI = AM.getAnalysis<DominanceInfo>("DominanceAnalysis", F);
     CG = AM.getAnalysis<CallGraph>("CallGraphAnalysis", *F.getParent());
     AA = AM.getAnalysis<AliasAnalysis::Result>("AliasAnalysis", F);
-    MSSA = AM.getAnalysis<MemorySSA>("MemorySSAAnalysis", F);
+    MSSA = nullptr;  // AM.getAnalysis<MemorySSA>("MemorySSAAnalysis", F);
     if (!AA || !DI || !CG) {
         std::cerr << "Warning: GVNPass requires DominanceInfo, CallGraph, "
                      "AliasAnalysis, and MemorySSA. Skipping function "
