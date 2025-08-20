@@ -31,8 +31,9 @@ bool InlinePass::runOnModule(Module& module, AnalysisManager& am) {
     const SuperGraph& superGraph = cg->getSuperGraph();
 
     for (SuperNode* superNode : superGraph) {
-        if (superNode->isSCC()) {
-            continue;
+        std::unordered_set<Function*> functions;
+        for (Function* func : superNode->getFunctions()) {
+            functions.insert(func);
         }
 
         for (Function* function : superNode->getFunctions()) {
@@ -48,9 +49,10 @@ bool InlinePass::runOnModule(Module& module, AnalysisManager& am) {
                     if (auto* call = dyn_cast<CallInst>(inst)) {
                         Function* callee = call->getCalledFunction();
                         if (callee && !callee->isDeclaration() &&
-                            callee != function) {
+                            callee != function && !functions.count(callee)) {
                             InlineCost cost =
                                 calculateInlineCost(callee, call, *cg);
+
                             if (cost.shouldInline) {
                                 inlineCandidates.push_back(
                                     {call, callee, cost.cost});
